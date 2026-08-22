@@ -1,0 +1,6 @@
+{
+  "name": "Royal Biryani House",
+  "description": "Premium QR code digital menu, table ordering, live kitchen KDS, POS billing counter, and professional sales reports & analytics for Royal Biryani House.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
