@@ -485,6 +485,7 @@ export const KitchenDashboard: React.FC<KitchenDashboardProps> = ({
             role="kitchen" 
             title="Kitchen Raw Material & Ingredient Stock" 
             subtitle="Manage physical kitchen stock, live cooking consumption, and low-stock alerts."
+            menuItems={menuItems}
           />
         )}
       </div>

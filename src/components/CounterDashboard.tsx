@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { 
   DollarSign, 
   ShoppingBag, 
@@ -33,9 +33,10 @@ import {
   ShieldCheck,
   Printer,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Building2
 } from 'lucide-react';
-import { Order, MenuItem, OrderStatus, CustomerFeedback, DiningSession, PaymentRecord } from '../types';
+import { Order, MenuItem, OrderStatus, CustomerFeedback, DiningSession, PaymentRecord, RestaurantTable } from '../types';
 import { 
   markOrderAsPaid, 
   settleDiningSession, 
@@ -44,10 +45,14 @@ import {
   getStoredPayments,
   updateOrderStatus, 
   updateMenuItemStock, 
-  saveCustomerFeedback 
+  saveCustomerFeedback,
+  getStoredRestaurantTables 
 } from '../lib/supabase';
 import { RawMaterialsInventory } from './RawMaterialsInventory';
 import { ReportsAndAnalytics } from './ReportsAndAnalytics';
+import { RestaurantSettingsTab } from './RestaurantSettingsTab';
+import { TableManagementTab } from './TableManagementTab';
+import { MenuManagementTab } from './MenuManagementTab';
 
 interface CounterDashboardProps {
   orders: Order[];
@@ -83,7 +88,7 @@ const ALL_RESTAURANT_TABLES = [
   'Takeaway Counter'
 ];
 
-type CounterTab = 'overview' | 'tables' | 'live-orders' | 'billing' | 'stock' | 'feedback' | 'reports';
+type CounterTab = 'overview' | 'tables' | 'live-orders' | 'billing' | 'stock' | 'feedback' | 'reports' | 'menu-manager' | 'table-manager' | 'restaurant-settings';
 
 export const CounterDashboard: React.FC<CounterDashboardProps> = ({
   orders,
@@ -93,7 +98,30 @@ export const CounterDashboard: React.FC<CounterDashboardProps> = ({
   isRefreshing = false
 }) => {
   const [activeTab, setActiveTab] = useState<CounterTab>('overview');
+  const [dbTables, setDbTables] = useState<RestaurantTable[]>(() => getStoredRestaurantTables());
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
+
+  useEffect(() => {
+    const handleTablesUpdate = () => {
+      setDbTables(getStoredRestaurantTables());
+    };
+    window.addEventListener('rbh_restaurant_tables_changed', handleTablesUpdate);
+    return () => {
+      window.removeEventListener('rbh_restaurant_tables_changed', handleTablesUpdate);
+    };
+  }, []);
+
+  const activeTableNames = useMemo(() => {
+    if (dbTables && dbTables.length > 0) {
+      const activeList = dbTables.filter(t => t.isActive !== false).map(t => t.tableNumber);
+      if (!activeList.some(n => n.toLowerCase().includes('takeaway'))) {
+        activeList.push('Takeaway Counter');
+      }
+      return activeList;
+    }
+    return ALL_RESTAURANT_TABLES;
+  }, [dbTables]);
+
   const [selectedSessionForPayment, setSelectedSessionForPayment] = useState<TableSessionBill | null>(null);
   const [isProcessingPayment, setIsProcessingPayment] = useState<boolean>(false);
   const [paymentSuccessToast, setPaymentSuccessToast] = useState<string | null>(null);
@@ -132,7 +160,7 @@ export const CounterDashboard: React.FC<CounterDashboardProps> = ({
   const tablesMap = useMemo(() => {
     const map = new Map<string, TableSessionBill>();
 
-    ALL_RESTAURANT_TABLES.forEach(table => {
+    activeTableNames.forEach(table => {
       // Find all unpaid & non-cancelled, non-archived orders for this table
       const tableOrders = orders
         .filter(o => 
@@ -274,18 +302,34 @@ export const CounterDashboard: React.FC<CounterDashboardProps> = ({
     setActiveTab('billing');
   };
 
-  // Active Live Orders: genuinely active / unsettled orders
-  // An order must NOT appear in Live Orders if: status = 'Completed' AND paymentStatus = 'Paid' AND remainingAmount <= 0.05
-  const isOrderFullySettled = (o: Order) => {
-    const isCompleted = o.status === 'Completed';
-    const isPaid = o.paymentStatus === 'Paid';
-    const hasNoRemaining = o.remainingAmount !== undefined ? o.remainingAmount <= 0.05 : isPaid;
-    return isCompleted && isPaid && hasNoRemaining;
-  };
+  // Active Live Orders: genuinely active / unsettled orders that require Counter attention
+  // Do NOT count: Completed orders, Paid orders, Settled tables, or orders with remaining balance <= 0
+  const isOrderLivePending = useCallback((o: Order) => {
+    if (!o || o.is_archived) return false;
+    if (o.status === 'Cancelled' || o.status === 'Completed') return false;
+
+    const isPaid = 
+      o.paymentStatus === 'Paid' ||
+      (o as any).payment_status === 'Paid' ||
+      String(o.paymentStatus || '').toLowerCase() === 'paid' ||
+      String((o as any).payment_status || '').toLowerCase() === 'paid' ||
+      Boolean((o as any).is_paid) ||
+      (o.remainingAmount !== undefined && o.remainingAmount <= 0.05) ||
+      ((o as any).remaining_amount !== undefined && (o as any).remaining_amount <= 0.05) ||
+      (o.paidAmount !== undefined && o.total !== undefined && o.total > 0 && o.paidAmount >= o.total - 0.05);
+
+    if (isPaid) return false;
+
+    const tableSession = tablesMap.get(o.tableNumber);
+    const isTableSettled = tableSession && (tableSession.status === 'Available' || tableSession.remainingAmount <= 0.05);
+    if (isTableSettled) return false;
+
+    return true;
+  }, [tablesMap]);
 
   const liveOrders = useMemo(() => {
-    return orders.filter(o => !o.is_archived && o.status !== 'Cancelled' && !isOrderFullySettled(o));
-  }, [orders]);
+    return orders.filter(isOrderLivePending);
+  }, [orders, isOrderLivePending]);
 
   const activeOrders = useMemo(() => {
     return orders.filter(o => o.status !== 'Completed');
@@ -684,7 +728,7 @@ export const CounterDashboard: React.FC<CounterDashboardProps> = ({
             <div>
               <p className="serif text-2xl font-bold text-[#5c1b1b]">{occupiedTablesCount}</p>
               <p className="text-[11px] text-stone-500 mt-0.5">
-                {Math.round((occupiedTablesCount / ALL_RESTAURANT_TABLES.length) * 100)}% occupancy
+                {Math.round((occupiedTablesCount / (activeTableNames.length || 1)) * 100)}% occupancy
               </p>
             </div>
           </div>
@@ -779,7 +823,7 @@ export const CounterDashboard: React.FC<CounterDashboardProps> = ({
             }`}
           >
             <Utensils className="w-4 h-4 text-[#d4af37]" />
-            <span>Table Layout ({ALL_RESTAURANT_TABLES.length})</span>
+            <span>Table Layout ({activeTableNames.length})</span>
             {occupiedTablesCount > 0 && (
               <span className="w-5 h-5 rounded-full bg-[#d4af37] text-[#5c1b1b] text-[10px] font-extrabold flex items-center justify-center">
                 {occupiedTablesCount}
@@ -843,7 +887,7 @@ export const CounterDashboard: React.FC<CounterDashboardProps> = ({
           <button
             id="reports-analytics-tab-btn"
             onClick={() => setActiveTab('reports')}
-            className={`px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-2 whitespace-nowrap ${
+            className={`px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-2 whitespace-nowrap cursor-pointer ${
               activeTab === 'reports'
                 ? 'bg-[#5c1b1b] text-white shadow-xs'
                 : 'bg-white hover:bg-[#f0ede8] text-stone-700 border border-[#e5e1da]'
@@ -851,6 +895,45 @@ export const CounterDashboard: React.FC<CounterDashboardProps> = ({
           >
             <BarChart3 className="w-4 h-4 text-[#d4af37]" />
             <span>Reports & Analytics</span>
+          </button>
+
+          <button
+            id="menu-manager-tab-btn"
+            onClick={() => setActiveTab('menu-manager')}
+            className={`px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-2 whitespace-nowrap cursor-pointer ${
+              activeTab === 'menu-manager'
+                ? 'bg-[#5c1b1b] text-white shadow-xs'
+                : 'bg-white hover:bg-[#f0ede8] text-stone-700 border border-[#e5e1da]'
+            }`}
+          >
+            <Utensils className="w-4 h-4 text-[#d4af37]" />
+            <span>Menu Manager</span>
+          </button>
+
+          <button
+            id="table-manager-tab-btn"
+            onClick={() => setActiveTab('table-manager')}
+            className={`px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-2 whitespace-nowrap cursor-pointer ${
+              activeTab === 'table-manager'
+                ? 'bg-[#5c1b1b] text-white shadow-xs'
+                : 'bg-white hover:bg-[#f0ede8] text-stone-700 border border-[#e5e1da]'
+            }`}
+          >
+            <Layers className="w-4 h-4 text-[#d4af37]" />
+            <span>Table Management</span>
+          </button>
+
+          <button
+            id="restaurant-settings-tab-btn"
+            onClick={() => setActiveTab('restaurant-settings')}
+            className={`px-4 py-2.5 rounded-xl text-xs font-bold transition flex items-center gap-2 whitespace-nowrap cursor-pointer ${
+              activeTab === 'restaurant-settings'
+                ? 'bg-[#5c1b1b] text-white shadow-xs'
+                : 'bg-white hover:bg-[#f0ede8] text-stone-700 border border-[#e5e1da]'
+            }`}
+          >
+            <Building2 className="w-4 h-4 text-[#d4af37]" />
+            <span>Restaurant Settings</span>
           </button>
         </div>
 
@@ -881,8 +964,24 @@ export const CounterDashboard: React.FC<CounterDashboardProps> = ({
               </div>
 
               <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3">
-                {ALL_RESTAURANT_TABLES.map(table => {
-                  const tableData = tablesMap.get(table)!;
+                {activeTableNames.map(table => {
+                  const tableData = tablesMap.get(table) || {
+                    tableNumber: table,
+                    sessionId: '',
+                    orders: [],
+                    ticketCount: 0,
+                    itemCount: 0,
+                    subtotal: 0,
+                    tax: 0,
+                    totalAmount: 0,
+                    paidAmount: 0,
+                    remainingAmount: 0,
+                    paymentStatus: 'Paid',
+                    paymentHistory: [],
+                    status: 'Available',
+                    startedAt: new Date().toISOString(),
+                    latestTicketStatus: 'Completed'
+                  } as TableSessionBill;
                   const isOccupied = tableData.status !== 'Available';
 
                   return (
@@ -1029,6 +1128,26 @@ export const CounterDashboard: React.FC<CounterDashboardProps> = ({
               ) : (
                 filteredOrders.map(order => {
                   const isAddonOrder = order.isAddon || (order.round && order.round > 1);
+                  const tableSession = tablesMap.get(order.tableNumber);
+                  const isTableSettled = !tableSession || tableSession.status === 'Available' || tableSession.remainingAmount <= 0.05;
+
+                  const sessionPayments = getPaymentsForSession(order.sessionId, [order.id], [order]);
+                  const recordedPaidAmount = sessionPayments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+                  const isPaidFromSessionRecords = recordedPaidAmount >= (order.total - 0.05) && order.total > 0;
+
+                  const isOrderPaid = 
+                    order.paymentStatus === 'Paid' || 
+                    (order as any).payment_status === 'Paid' ||
+                    String(order.paymentStatus || '').toLowerCase() === 'paid' ||
+                    String((order as any).payment_status || '').toLowerCase() === 'paid' ||
+                    (order.remainingAmount !== undefined && order.remainingAmount <= 0.05) ||
+                    ((order as any).remaining_amount !== undefined && (order as any).remaining_amount <= 0.05) ||
+                    (order.paidAmount !== undefined && order.total !== undefined && order.total > 0 && order.paidAmount >= order.total - 0.05) ||
+                    Boolean((order as any).is_paid) ||
+                    isPaidFromSessionRecords ||
+                    isTableSettled;
+
+                  const displayedPaymentMode = order.paymentMode || (order as any).payment_mode || sessionPayments[sessionPayments.length - 1]?.paymentMode || 'Counter';
 
                   return (
                     <div
@@ -1097,17 +1216,17 @@ export const CounterDashboard: React.FC<CounterDashboardProps> = ({
                         </div>
 
                         <div className="flex items-center gap-1.5">
-                          {order.paymentStatus === 'Paid' || (order.remainingAmount !== undefined && order.remainingAmount <= 0.05) ? (
+                          {isOrderPaid ? (
                             <span className="px-2.5 py-1 rounded-lg bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-bold flex items-center gap-1">
                               <Check className="w-3.5 h-3.5" />
-                              <span>Paid ({order.paymentMode || 'Counter'})</span>
+                              <span>Paid ({displayedPaymentMode})</span>
                             </span>
                           ) : (
                             <button
                               onClick={() => {
-                                const tableSession = tablesMap.get(order.tableNumber);
-                                if (tableSession && tableSession.remainingAmount > 0.05) {
-                                  setSelectedSessionForPayment(tableSession);
+                                const currentTableSession = tablesMap.get(order.tableNumber);
+                                if (currentTableSession && currentTableSession.remainingAmount > 0.05) {
+                                  setSelectedSessionForPayment(currentTableSession);
                                   setActiveTab('billing');
                                 }
                               }}
@@ -1672,6 +1791,7 @@ export const CounterDashboard: React.FC<CounterDashboardProps> = ({
                 role="counter" 
                 title="Counter & Kitchen Raw Material Inventory" 
                 subtitle="Live ingredient quantities, low-stock warnings, and historical stock movements synced across kitchen and manager counter."
+                menuItems={menuItems}
               />
             ) : (
               <div className="space-y-4">
@@ -1933,6 +2053,26 @@ export const CounterDashboard: React.FC<CounterDashboardProps> = ({
             onRefreshData={onRefreshData}
             isRefreshing={isRefreshing}
           />
+        )}
+
+        {/* TAB 7: MENU MANAGER */}
+        {activeTab === 'menu-manager' && (
+          <MenuManagementTab
+            menuItems={menuItems}
+            onRefreshData={async () => {
+              onRefreshData();
+            }}
+          />
+        )}
+
+        {/* TAB 8: TABLE MANAGEMENT */}
+        {activeTab === 'table-manager' && (
+          <TableManagementTab />
+        )}
+
+        {/* TAB 9: RESTAURANT SETTINGS */}
+        {activeTab === 'restaurant-settings' && (
+          <RestaurantSettingsTab />
         )}
       </div>
 

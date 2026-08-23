@@ -297,6 +297,62 @@ CREATE POLICY "Staff can update and manage orders"
     USING (public.is_restaurant_staff(restaurant_id, ARRAY['kitchen', 'counter', 'manager', 'admin']))
     WITH CHECK (public.is_restaurant_staff(restaurant_id, ARRAY['kitchen', 'counter', 'manager', 'admin']));
 
+-- 9.3.1 Secure KDS RPC Function (Allows advancing order status with strict parameter validation & restaurant isolation)
+CREATE OR REPLACE FUNCTION public.kds_advance_order_status(
+    p_order_id TEXT,
+    p_restaurant_id TEXT,
+    p_next_status TEXT
+)
+RETURNS JSONB
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    v_updated_row RECORD;
+BEGIN
+    -- 1. Validate inputs
+    IF p_order_id IS NULL OR TRIM(p_order_id) = '' THEN
+        RAISE EXCEPTION 'Order ID is required';
+    END IF;
+
+    IF p_restaurant_id IS NULL OR TRIM(p_restaurant_id) = '' THEN
+        RAISE EXCEPTION 'Restaurant ID is required';
+    END IF;
+
+    IF p_next_status NOT IN ('New', 'Preparing', 'Ready', 'Served', 'Completed', 'Cancelled') THEN
+        RAISE EXCEPTION 'Invalid order status: %', p_next_status;
+    END IF;
+
+    -- 2. Update ONLY the target order within the specified restaurant
+    UPDATE public.royal_orders
+    SET status = p_next_status,
+        updated_at = NOW()
+    WHERE order_id = p_order_id
+      AND restaurant_id = p_restaurant_id
+      AND is_archived = false
+    RETURNING order_id, restaurant_id, status, updated_at INTO v_updated_row;
+
+    IF NOT FOUND THEN
+        RETURN jsonb_build_object(
+            'success', false,
+            'message', 'Order not found for the specified restaurant or is archived'
+        );
+    END IF;
+
+    RETURN jsonb_build_object(
+        'success', true,
+        'order_id', v_updated_row.order_id,
+        'restaurant_id', v_updated_row.restaurant_id,
+        'status', v_updated_row.status,
+        'updated_at', v_updated_row.updated_at
+    );
+END;
+$$;
+
+-- Grant execution to anon and authenticated roles
+GRANT EXECUTE ON FUNCTION public.kds_advance_order_status(TEXT, TEXT, TEXT) TO anon, authenticated;
+
 -- 9.4 Payments Policies (Authorized Staff only; Anon is NEVER granted access; No hard DELETE)
 CREATE POLICY "Staff can view all payments" 
     ON public.royal_payments 

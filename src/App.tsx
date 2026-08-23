@@ -559,9 +559,34 @@ export default function App() {
   const cartSubtotal = cartItems.reduce((sum, ci) => sum + ci.item.Price * ci.quantity, 0);
 
   // Active pending orders count for kitchen badge (staff only)
-  const pendingOrdersCount = activeOrders.filter((o) => o.status === 'New' || o.status === 'Preparing').length;
-  // Pending bills count for Counter manager badge (staff only)
-  const pendingBillsCount = activeOrders.filter((o) => o.paymentStatus !== 'Paid' && o.status !== 'Cancelled' && !o.is_archived && (o.remainingAmount === undefined || o.remainingAmount > 0.05)).length;
+  const pendingOrdersCount = useMemo(() => {
+    return activeOrders.filter((o) => !o.is_archived && (o.status === 'New' || o.status === 'Preparing')).length;
+  }, [activeOrders]);
+
+  // Pending bills count for Counter manager badge (staff only) - excludes completed, paid, and settled orders
+  const pendingBillsCount = useMemo(() => {
+    return activeOrders.filter((o) => {
+      if (o.is_archived || o.status === 'Cancelled' || o.status === 'Completed') {
+        return false;
+      }
+
+      const isPaid = 
+        o.paymentStatus === 'Paid' ||
+        (o as any).payment_status === 'Paid' ||
+        String(o.paymentStatus || '').toLowerCase() === 'paid' ||
+        String((o as any).payment_status || '').toLowerCase() === 'paid' ||
+        Boolean((o as any).is_paid) ||
+        (o.remainingAmount !== undefined && o.remainingAmount <= 0.05) ||
+        ((o as any).remaining_amount !== undefined && (o as any).remaining_amount <= 0.05) ||
+        (o.paidAmount !== undefined && o.total !== undefined && o.total > 0 && o.paidAmount >= o.total - 0.05);
+
+      if (isPaid) {
+        return false;
+      }
+
+      return o.remainingAmount === undefined || o.remainingAmount > 0.05;
+    }).length;
+  }, [activeOrders]);
 
   return (
     <div className="min-h-screen bg-[#fdfbf7] text-[#1a1a1a] flex flex-col selection:bg-[#d4af37] selection:text-white">

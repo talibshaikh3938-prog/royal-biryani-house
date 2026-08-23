@@ -1,4 +1,4 @@
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { createClient, SupabaseClient, RealtimeChannel } from '@supabase/supabase-js';
 import { 
   MenuItem, 
   Order, 
@@ -8,17 +8,37 @@ import {
   StockMovement, 
   StockMovementType, 
   StockMovementReason, 
-  RawMaterialStockStatus, 
+  RawMaterialStockStatus,
+  RawMaterialUnit,
+  MenuItemRecipe,
+  RecipeIngredient,
+  InventoryPurchaseRecord,
+  PurchaseItemEntry,
+  InventoryWastageRecord,
   DiningSession, 
   PaymentRecord, 
   PaymentMode,
   RestaurantBackupSnapshot,
   RestaurantProfile,
   StaffProfile,
-  StaffRole
+  StaffRole,
+  RestaurantSettings,
+  RestaurantTable,
+  MenuCategory,
+  MenuSubcategory,
+  MenuItemVariant,
+  MenuItemAddon,
+  BulkImportRow,
+  ImportValidationResult
 } from '../types';
 import { DEFAULT_MENU_ITEMS } from '../data/defaultMenu';
-import { DEFAULT_RAW_MATERIALS, DEFAULT_STOCK_MOVEMENTS } from '../data/defaultRawMaterials';
+import { 
+  DEFAULT_RAW_MATERIALS, 
+  DEFAULT_STOCK_MOVEMENTS,
+  DEFAULT_MENU_RECIPES,
+  DEFAULT_PURCHASE_RECORDS,
+  DEFAULT_WASTAGE_RECORDS
+} from '../data/defaultRawMaterials';
 import { INITIAL_HISTORICAL_ORDERS } from '../data/defaultOrders';
 
 // Default Restaurant Identifier
@@ -36,8 +56,80 @@ const ORDERS_STORAGE_KEY = 'rbh_restaurant_orders';
 const FEEDBACK_STORAGE_KEY = 'rbh_customer_feedbacks';
 const RAW_MATERIALS_STORAGE_KEY = 'rbh_raw_materials_inventory';
 const STOCK_MOVEMENTS_STORAGE_KEY = 'rbh_stock_movements_log';
+const MENU_RECIPES_STORAGE_KEY = 'rbh_menu_recipes';
+const INVENTORY_PURCHASES_STORAGE_KEY = 'rbh_inventory_purchases';
+const INVENTORY_WASTAGE_STORAGE_KEY = 'rbh_inventory_wastage';
+const CONSUMED_ORDERS_STORAGE_KEY = 'rbh_consumed_orders_ledger';
 const PAYMENTS_STORAGE_KEY = 'rbh_payments_log';
 const STAFF_PROFILE_STORAGE_KEY = 'rbh_active_staff_profile';
+const RESTAURANT_SETTINGS_STORAGE_KEY = 'rbh_restaurant_settings';
+const RESTAURANT_TABLES_STORAGE_KEY = 'rbh_restaurant_tables';
+const MENU_CATEGORIES_STORAGE_KEY = 'rbh_menu_categories';
+const MENU_SUBCATEGORIES_STORAGE_KEY = 'rbh_menu_subcategories';
+
+// Sensible Default Settings
+export const DEFAULT_RESTAURANT_SETTINGS: RestaurantSettings = {
+  id: DEFAULT_RESTAURANT_ID,
+  restaurant_id: DEFAULT_RESTAURANT_ID,
+  name: 'Royal Biryani House',
+  logo: '',
+  tagline: 'Authentic Dum Biryani & Mughlai Cuisine',
+  address: '124 Heritage Lane, Connaught Place, New Delhi',
+  phone: '+91 98765 43210',
+  email: 'contact@royalbiryani.com',
+  openingTime: '11:00 AM',
+  closingTime: '11:00 PM',
+  restaurantType: 'Dine-In & Takeaway',
+  gstEnabled: true,
+  gstRate: 5.0,
+  serviceChargeEnabled: false,
+  serviceChargeRate: 5.0,
+  receiptFooter: 'Thank you for dining at Royal Biryani House! Please visit again.',
+  currencySymbol: '₹'
+};
+
+// Sensible Default Tables
+export const DEFAULT_RESTAURANT_TABLES: RestaurantTable[] = [
+  { id: 'tbl-1', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Table 1', section: 'Ground Floor', capacity: 4, isActive: true, displayOrder: 1 },
+  { id: 'tbl-2', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Table 2', section: 'Ground Floor', capacity: 4, isActive: true, displayOrder: 2 },
+  { id: 'tbl-3', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Table 3', section: 'Ground Floor', capacity: 6, isActive: true, displayOrder: 3 },
+  { id: 'tbl-4', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Table 4', section: 'Ground Floor', capacity: 4, isActive: true, displayOrder: 4 },
+  { id: 'tbl-5', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Table 5', section: 'First Floor', capacity: 4, isActive: true, displayOrder: 5 },
+  { id: 'tbl-6', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Table 6', section: 'First Floor', capacity: 6, isActive: true, displayOrder: 6 },
+  { id: 'tbl-7', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Table 7', section: 'First Floor', capacity: 8, isActive: true, displayOrder: 7 },
+  { id: 'tbl-8', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Table 8', section: 'First Floor', capacity: 2, isActive: true, displayOrder: 8 },
+  { id: 'tbl-o1', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Table O1', section: 'Outdoor Patio', capacity: 4, isActive: true, displayOrder: 9 },
+  { id: 'tbl-o2', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Table O2', section: 'Outdoor Patio', capacity: 4, isActive: true, displayOrder: 10 },
+  { id: 'tbl-o3', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Table O3', section: 'Outdoor Patio', capacity: 2, isActive: true, displayOrder: 11 },
+  { id: 'tbl-b1', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Bar 1', section: 'Bar Area', capacity: 2, isActive: true, displayOrder: 12 },
+  { id: 'tbl-b2', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Bar 2', section: 'Bar Area', capacity: 2, isActive: true, displayOrder: 13 },
+  { id: 'tbl-tk1', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Takeaway Counter', section: 'Takeaway', capacity: 1, isActive: true, displayOrder: 14 }
+];
+
+// Sensible Default Menu Categories
+export const DEFAULT_MENU_CATEGORIES: MenuCategory[] = [
+  { id: 'cat-biryani', restaurant_id: DEFAULT_RESTAURANT_ID, name: 'Biryani Specials', description: 'Slow-cooked Awadhi & Hyderabadi Dum Handi Biryanis', icon: 'Crown', displayOrder: 1, isActive: true },
+  { id: 'cat-starters', restaurant_id: DEFAULT_RESTAURANT_ID, name: 'Starters & Tandoor', description: 'Charcoal-grilled kebabs, tikkas, and crisp appetizers', icon: 'Flame', displayOrder: 2, isActive: true },
+  { id: 'cat-curries', restaurant_id: DEFAULT_RESTAURANT_ID, name: 'Royal Curries', description: 'Rich Mughlai gravies, butter chicken, and shahi paneer', icon: 'UtensilsCrossed', displayOrder: 3, isActive: true },
+  { id: 'cat-breads', restaurant_id: DEFAULT_RESTAURANT_ID, name: 'Breads & Rice', description: 'Fresh clay-oven tandoori rotis, naans, and jeera rice', icon: 'Layers', displayOrder: 4, isActive: true },
+  { id: 'cat-beverages', restaurant_id: DEFAULT_RESTAURANT_ID, name: 'Beverages', description: 'Soft drinks, alcoholic spirits, mocktails, and lassis', icon: 'Wine', displayOrder: 5, isActive: true },
+  { id: 'cat-desserts', restaurant_id: DEFAULT_RESTAURANT_ID, name: 'Beverages & Desserts', description: 'Shahi tukda, gulab jamun, and kesariya kulfi', icon: 'Sparkles', displayOrder: 6, isActive: true },
+  { id: 'cat-accompaniments', restaurant_id: DEFAULT_RESTAURANT_ID, name: 'Accompaniments', description: 'Mirchi ka salan, boondi raita, and fresh salads', icon: 'Plus', displayOrder: 7, isActive: true }
+];
+
+// Sensible Default Menu Subcategories
+export const DEFAULT_MENU_SUBCATEGORIES: MenuSubcategory[] = [
+  { id: 'sub-dum-biryani', restaurant_id: DEFAULT_RESTAURANT_ID, categoryId: 'cat-biryani', name: 'Dum Biryani', description: 'Sealed handi dum cooked', displayOrder: 1, isActive: true },
+  { id: 'sub-handi-biryani', restaurant_id: DEFAULT_RESTAURANT_ID, categoryId: 'cat-biryani', name: 'Handi Specials', description: 'Special copper handi portions', displayOrder: 2, isActive: true },
+  { id: 'sub-tandoori', restaurant_id: DEFAULT_RESTAURANT_ID, categoryId: 'cat-starters', name: 'Tandoori Kebabs', description: 'Charcoal clay oven grilled', displayOrder: 1, isActive: true },
+  { id: 'sub-tikkas', restaurant_id: DEFAULT_RESTAURANT_ID, categoryId: 'cat-starters', name: 'Tikka Specials', description: 'Boneless spiced marinades', displayOrder: 2, isActive: true },
+  { id: 'sub-chicken-curries', restaurant_id: DEFAULT_RESTAURANT_ID, categoryId: 'cat-curries', name: 'Chicken Curries', description: 'Royal Mughlai gravies', displayOrder: 1, isActive: true },
+  { id: 'sub-mutton-curries', restaurant_id: DEFAULT_RESTAURANT_ID, categoryId: 'cat-curries', name: 'Mutton & Meat', description: 'Slow-braised Awadhi cuts', displayOrder: 2, isActive: true },
+  { id: 'sub-paneer-curries', restaurant_id: DEFAULT_RESTAURANT_ID, categoryId: 'cat-curries', name: 'Paneer & Vegetarian', description: 'Cottage cheese and rich dal', displayOrder: 3, isActive: true },
+  { id: 'sub-softdrinks', restaurant_id: DEFAULT_RESTAURANT_ID, categoryId: 'cat-beverages', name: 'Soft Drinks', description: 'Chilled carbonated sodas', displayOrder: 1, isActive: true },
+  { id: 'sub-alcohol', restaurant_id: DEFAULT_RESTAURANT_ID, categoryId: 'cat-beverages', name: 'Alcohol & Spirits', description: 'Whisky, Beer, Rum, and Vodka with 30ml/60ml/90ml variants', displayOrder: 2, isActive: true },
+  { id: 'sub-mocktails', restaurant_id: DEFAULT_RESTAURANT_ID, categoryId: 'cat-beverages', name: 'Lassi & Mocktails', description: 'Fresh churned yogurt and fruit coolers', displayOrder: 3, isActive: true }
+];
 
 // Multi-tenant Restaurant ID Management
 export function getCurrentRestaurantId(): string {
@@ -400,21 +492,55 @@ export function mapSupabaseRowToMenuItem(row: Record<string, any>): MenuItem {
 
   const finalId = rawId || `item-${Math.random().toString(36).substring(2, 9)}`;
 
+  // Parse variants if available
+  let variants: MenuItemVariant[] | undefined = undefined;
+  const rawVariants = row.variants || row.Variants;
+  if (rawVariants) {
+    if (Array.isArray(rawVariants)) {
+      variants = rawVariants;
+    } else if (typeof rawVariants === 'string') {
+      try { variants = JSON.parse(rawVariants); } catch {}
+    }
+  }
+
+  // Parse addons if available
+  let addons: MenuItemAddon[] | undefined = undefined;
+  const rawAddons = row.addons || row.Addons;
+  if (rawAddons) {
+    if (Array.isArray(rawAddons)) {
+      addons = rawAddons;
+    } else if (typeof rawAddons === 'string') {
+      try { addons = JSON.parse(rawAddons); } catch {}
+    }
+  }
+
+  const vegType: 'Veg' | 'Non-Veg' | 'Egg' = row.veg_type || row.vegType || (isVeg ? 'Veg' : 'Non-Veg');
+
   return {
     id: finalId,
+    restaurant_id: row.restaurant_id || getCurrentRestaurantId(),
     created_at: row.created_at,
     Name: name,
     Price: isNaN(price) ? 250 : price,
+    basePrice: typeof row.base_price === 'number' ? row.base_price : (typeof row.basePrice === 'number' ? row.basePrice : price),
     Description: description,
     Image_url: imageUrl,
     Available: available && stockStatus !== 'Out of Stock',
     category: row.category || category,
+    categoryId: row.category_id || row.categoryId,
+    subcategoryId: row.subcategory_id || row.subcategoryId,
+    subcategoryName: row.subcategory_name || row.subcategoryName,
     isVeg,
+    vegType,
     isSpicy: row.is_spicy ?? (lowerName.includes('dum') || lowerName.includes('hyderabadi') || lowerName.includes('chili') || lowerName.includes('tikka')),
     isBestSeller: row.is_bestseller ?? (lowerName.includes('chicken biryani') || lowerName.includes('butter chicken') || lowerName.includes('malai tikka')),
     prepTime: row.prep_time || '15-20 mins',
     stockCount,
-    stockStatus
+    stockStatus,
+    variants,
+    addons,
+    displayOrder: row.display_order ?? row.displayOrder,
+    is_archived: Boolean(row.is_archived)
   };
 }
 
@@ -641,6 +767,1162 @@ export async function seedDefaultMenuToSupabase(): Promise<{ success: boolean; m
   }
 }
 
+// ============================================================================
+// PHASE 1: RESTAURANT SETTINGS & PROFILE MANAGEMENT
+// ============================================================================
+
+export function getStoredRestaurantSettings(restaurantId: string = getCurrentRestaurantId()): RestaurantSettings {
+  try {
+    const raw = localStorage.getItem(`${RESTAURANT_SETTINGS_STORAGE_KEY}_${restaurantId}`) || localStorage.getItem(RESTAURANT_SETTINGS_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      return { ...DEFAULT_RESTAURANT_SETTINGS, ...parsed, id: restaurantId, restaurant_id: restaurantId };
+    }
+  } catch (e) {
+    console.error('Failed to get stored restaurant settings', e);
+  }
+  return { ...DEFAULT_RESTAURANT_SETTINGS, id: restaurantId, restaurant_id: restaurantId };
+}
+
+export async function fetchRestaurantSettings(restaurantId: string = getCurrentRestaurantId()): Promise<RestaurantSettings> {
+  const supabase = getSupabaseClient();
+  const local = getStoredRestaurantSettings(restaurantId);
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('restaurant_settings')
+        .select('*')
+        .eq('restaurant_id', restaurantId)
+        .maybeSingle();
+
+      if (!error && data) {
+        const settings: RestaurantSettings = {
+          id: data.id || restaurantId,
+          restaurant_id: data.restaurant_id || restaurantId,
+          name: data.name || local.name,
+          logo: data.logo || local.logo || '',
+          tagline: data.tagline || local.tagline || '',
+          address: data.address || local.address || '',
+          phone: data.phone || local.phone || '',
+          email: data.email || local.email || '',
+          openingTime: data.opening_time || data.openingTime || local.openingTime,
+          closingTime: data.closing_time || data.closingTime || local.closingTime,
+          restaurantType: data.restaurant_type || data.restaurantType || local.restaurantType,
+          gstEnabled: data.gst_enabled !== undefined ? Boolean(data.gst_enabled) : local.gstEnabled,
+          gstRate: typeof data.gst_rate === 'number' ? data.gst_rate : local.gstRate,
+          serviceChargeEnabled: data.service_charge_enabled !== undefined ? Boolean(data.service_charge_enabled) : local.serviceChargeEnabled,
+          serviceChargeRate: typeof data.service_charge_rate === 'number' ? data.service_charge_rate : local.serviceChargeRate,
+          receiptFooter: data.receipt_footer || local.receiptFooter,
+          currencySymbol: data.currency_symbol || data.currency || local.currencySymbol || '₹',
+          created_at: data.created_at,
+          updated_at: data.updated_at
+        };
+        localStorage.setItem(`${RESTAURANT_SETTINGS_STORAGE_KEY}_${restaurantId}`, JSON.stringify(settings));
+        return settings;
+      }
+    } catch (e) {
+      console.warn('Supabase fetchRestaurantSettings fallback to local', e);
+    }
+  }
+  return local;
+}
+
+export async function saveRestaurantSettings(settings: RestaurantSettings): Promise<{ success: boolean; settings: RestaurantSettings; error?: string }> {
+  const restaurantId = settings.restaurant_id || getCurrentRestaurantId();
+  const payload: RestaurantSettings = {
+    ...settings,
+    id: settings.id || restaurantId,
+    restaurant_id: restaurantId,
+    updated_at: new Date().toISOString()
+  };
+
+  try {
+    localStorage.setItem(`${RESTAURANT_SETTINGS_STORAGE_KEY}_${restaurantId}`, JSON.stringify(payload));
+    localStorage.setItem(RESTAURANT_SETTINGS_STORAGE_KEY, JSON.stringify(payload));
+  } catch (e) {
+    console.error('Failed to save settings to localStorage', e);
+  }
+
+  // Broadcast & event dispatch
+  if (ordersBroadcastChannel) {
+    try {
+      ordersBroadcastChannel.postMessage({ type: 'RESTAURANT_SETTINGS_CHANGED', restaurantId, settings: payload });
+    } catch {}
+  }
+  window.dispatchEvent(new CustomEvent('rbh_restaurant_settings_changed', { detail: payload }));
+
+  const supabase = getSupabaseClient();
+  if (supabase) {
+    try {
+      const dbPayload = {
+        id: payload.id,
+        restaurant_id: payload.restaurant_id,
+        name: payload.name,
+        logo: payload.logo || null,
+        tagline: payload.tagline || null,
+        address: payload.address || null,
+        phone: payload.phone || null,
+        email: payload.email || null,
+        opening_time: payload.openingTime || null,
+        closing_time: payload.closingTime || null,
+        restaurant_type: payload.restaurantType || 'Dine-In & Takeaway',
+        gst_enabled: Boolean(payload.gstEnabled),
+        gst_rate: Number(payload.gstRate || 0),
+        service_charge_enabled: Boolean(payload.serviceChargeEnabled),
+        service_charge_rate: Number(payload.serviceChargeRate || 0),
+        receipt_footer: payload.receiptFooter || null,
+        currency: payload.currencySymbol || 'INR',
+        updated_at: new Date().toISOString()
+      };
+
+      const { error } = await supabase
+        .from('restaurant_settings')
+        .upsert(dbPayload, { onConflict: 'restaurant_id' });
+
+      if (error) {
+        console.warn('Supabase upsert restaurant_settings failed:', error.message);
+      }
+    } catch (e: any) {
+      console.warn('Supabase restaurant_settings error:', e.message);
+    }
+  }
+
+  return { success: true, settings: payload };
+}
+
+// ============================================================================
+// PHASE 1: TABLE MANAGEMENT
+// ============================================================================
+
+export function getStoredRestaurantTables(restaurantId: string = getCurrentRestaurantId()): RestaurantTable[] {
+  try {
+    const raw = localStorage.getItem(`${RESTAURANT_TABLES_STORAGE_KEY}_${restaurantId}`) || localStorage.getItem(RESTAURANT_TABLES_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
+    }
+  } catch (e) {
+    console.error('Failed to get stored restaurant tables', e);
+  }
+  return DEFAULT_RESTAURANT_TABLES.map(t => ({ ...t, restaurant_id: restaurantId }));
+}
+
+export function saveStoredRestaurantTables(tables: RestaurantTable[], restaurantId: string = getCurrentRestaurantId()): void {
+  try {
+    localStorage.setItem(`${RESTAURANT_TABLES_STORAGE_KEY}_${restaurantId}`, JSON.stringify(tables));
+    localStorage.setItem(RESTAURANT_TABLES_STORAGE_KEY, JSON.stringify(tables));
+  } catch (e) {
+    console.error('Failed to save stored restaurant tables', e);
+  }
+}
+
+export async function fetchRestaurantTables(restaurantId: string = getCurrentRestaurantId()): Promise<RestaurantTable[]> {
+  const supabase = getSupabaseClient();
+  const local = getStoredRestaurantTables(restaurantId);
+
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('restaurant_tables')
+        .select('*')
+        .eq('restaurant_id', restaurantId)
+        .order('display_order', { ascending: true });
+
+      if (!error && data && data.length > 0) {
+        const mapped: RestaurantTable[] = data.map((row: any) => ({
+          id: String(row.id),
+          restaurant_id: row.restaurant_id || restaurantId,
+          tableNumber: row.table_number || row.tableNumber || `Table ${row.id}`,
+          section: row.section || 'Ground Floor',
+          capacity: Number(row.capacity || 4),
+          isActive: row.is_active !== undefined ? Boolean(row.is_active) : true,
+          displayOrder: Number(row.display_order || 0),
+          qrCodeUrl: row.qr_code_url || undefined,
+          created_at: row.created_at,
+          updated_at: row.updated_at
+        }));
+        saveStoredRestaurantTables(mapped, restaurantId);
+        return mapped;
+      }
+    } catch (e) {
+      console.warn('Supabase fetchRestaurantTables fallback to local', e);
+    }
+  }
+  return local;
+}
+
+export async function saveRestaurantTable(table: Partial<RestaurantTable>): Promise<{ success: boolean; table: RestaurantTable; error?: string }> {
+  const restaurantId = table.restaurant_id || getCurrentRestaurantId();
+  const tables = getStoredRestaurantTables(restaurantId);
+  const now = new Date().toISOString();
+
+  let target: RestaurantTable;
+  if (table.id && tables.some(t => t.id === table.id)) {
+    target = {
+      ...tables.find(t => t.id === table.id)!,
+      ...table,
+      restaurant_id: restaurantId,
+      updated_at: now
+    } as RestaurantTable;
+    const updated = tables.map(t => t.id === table.id ? target : t);
+    saveStoredRestaurantTables(updated, restaurantId);
+  } else {
+    const newId = table.id || `tbl-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
+    target = {
+      id: newId,
+      restaurant_id: restaurantId,
+      tableNumber: table.tableNumber || `Table ${tables.length + 1}`,
+      section: table.section || 'Ground Floor',
+      capacity: Number(table.capacity || 4),
+      isActive: table.isActive !== undefined ? Boolean(table.isActive) : true,
+      displayOrder: table.displayOrder !== undefined ? table.displayOrder : tables.length + 1,
+      qrCodeUrl: table.qrCodeUrl,
+      created_at: now,
+      updated_at: now
+    };
+    tables.push(target);
+    saveStoredRestaurantTables(tables, restaurantId);
+  }
+
+  // Broadcast & events
+  if (ordersBroadcastChannel) {
+    try {
+      ordersBroadcastChannel.postMessage({ type: 'RESTAURANT_TABLES_CHANGED', restaurantId, table: target });
+    } catch {}
+  }
+  window.dispatchEvent(new CustomEvent('rbh_restaurant_tables_changed', { detail: target }));
+
+  const supabase = getSupabaseClient();
+  if (supabase) {
+    try {
+      const dbPayload = {
+        id: target.id,
+        restaurant_id: target.restaurant_id,
+        table_number: target.tableNumber,
+        section: target.section,
+        capacity: target.capacity,
+        is_active: target.isActive,
+        display_order: target.displayOrder,
+        qr_code_url: target.qrCodeUrl || null,
+        updated_at: now
+      };
+      await supabase.from('restaurant_tables').upsert(dbPayload, { onConflict: 'id' });
+    } catch (e) {
+      console.warn('Supabase saveRestaurantTable failed', e);
+    }
+  }
+
+  return { success: true, table: target };
+}
+
+export async function deleteRestaurantTable(tableId: string): Promise<boolean> {
+  const restaurantId = getCurrentRestaurantId();
+  const tables = getStoredRestaurantTables(restaurantId);
+  const filtered = tables.filter(t => t.id !== tableId);
+  saveStoredRestaurantTables(filtered, restaurantId);
+
+  if (ordersBroadcastChannel) {
+    try {
+      ordersBroadcastChannel.postMessage({ type: 'RESTAURANT_TABLES_CHANGED', restaurantId, deletedId: tableId });
+    } catch {}
+  }
+  window.dispatchEvent(new CustomEvent('rbh_restaurant_tables_changed', { detail: { deletedId: tableId } }));
+
+  const supabase = getSupabaseClient();
+  if (supabase) {
+    try {
+      await supabase.from('restaurant_tables').delete().eq('id', tableId).eq('restaurant_id', restaurantId);
+    } catch (e) {
+      console.warn('Supabase deleteRestaurantTable failed', e);
+    }
+  }
+
+  return true;
+}
+
+// ============================================================================
+// PHASE 1: MENU CATEGORIES & SUBCATEGORIES MANAGEMENT
+// ============================================================================
+
+export function getStoredMenuCategories(restaurantId: string = getCurrentRestaurantId()): MenuCategory[] {
+  try {
+    const raw = localStorage.getItem(`${MENU_CATEGORIES_STORAGE_KEY}_${restaurantId}`) || localStorage.getItem(MENU_CATEGORIES_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
+    }
+  } catch (e) {
+    console.error('Failed to get stored menu categories', e);
+  }
+  return DEFAULT_MENU_CATEGORIES.map(c => ({ ...c, restaurant_id: restaurantId }));
+}
+
+export function saveStoredMenuCategories(categories: MenuCategory[], restaurantId: string = getCurrentRestaurantId()): void {
+  try {
+    localStorage.setItem(`${MENU_CATEGORIES_STORAGE_KEY}_${restaurantId}`, JSON.stringify(categories));
+    localStorage.setItem(MENU_CATEGORIES_STORAGE_KEY, JSON.stringify(categories));
+  } catch (e) {}
+}
+
+export async function fetchMenuCategories(restaurantId: string = getCurrentRestaurantId()): Promise<MenuCategory[]> {
+  const supabase = getSupabaseClient();
+  const local = getStoredMenuCategories(restaurantId);
+
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('menu_categories')
+        .select('*')
+        .eq('restaurant_id', restaurantId)
+        .order('display_order', { ascending: true });
+
+      if (!error && data && data.length > 0) {
+        const mapped: MenuCategory[] = data.map((row: any) => ({
+          id: String(row.id),
+          restaurant_id: row.restaurant_id || restaurantId,
+          name: row.name,
+          description: row.description || '',
+          icon: row.icon || 'Utensils',
+          displayOrder: Number(row.display_order || 0),
+          isActive: row.is_active !== undefined ? Boolean(row.is_active) : true,
+          created_at: row.created_at,
+          updated_at: row.updated_at
+        }));
+        saveStoredMenuCategories(mapped, restaurantId);
+        return mapped;
+      }
+    } catch (e) {
+      console.warn('Supabase fetchMenuCategories fallback to local', e);
+    }
+  }
+  return local;
+}
+
+export async function saveMenuCategory(category: Partial<MenuCategory>): Promise<{ success: boolean; category: MenuCategory }> {
+  const restaurantId = category.restaurant_id || getCurrentRestaurantId();
+  const categories = getStoredMenuCategories(restaurantId);
+  const now = new Date().toISOString();
+
+  let target: MenuCategory;
+  if (category.id && categories.some(c => c.id === category.id)) {
+    target = {
+      ...categories.find(c => c.id === category.id)!,
+      ...category,
+      restaurant_id: restaurantId,
+      updated_at: now
+    } as MenuCategory;
+    const updated = categories.map(c => c.id === category.id ? target : c);
+    saveStoredMenuCategories(updated, restaurantId);
+  } else {
+    const newId = category.id || `cat-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
+    target = {
+      id: newId,
+      restaurant_id: restaurantId,
+      name: category.name || 'New Category',
+      description: category.description || '',
+      icon: category.icon || 'Utensils',
+      displayOrder: category.displayOrder !== undefined ? category.displayOrder : categories.length + 1,
+      isActive: category.isActive !== undefined ? Boolean(category.isActive) : true,
+      created_at: now,
+      updated_at: now
+    };
+    categories.push(target);
+    saveStoredMenuCategories(categories, restaurantId);
+  }
+
+  window.dispatchEvent(new CustomEvent('rbh_menu_categories_changed', { detail: target }));
+
+  const supabase = getSupabaseClient();
+  if (supabase) {
+    try {
+      await supabase.from('menu_categories').upsert({
+        id: target.id,
+        restaurant_id: target.restaurant_id,
+        name: target.name,
+        description: target.description || null,
+        icon: target.icon || null,
+        display_order: target.displayOrder,
+        is_active: target.isActive,
+        updated_at: now
+      }, { onConflict: 'id' });
+    } catch (e) {
+      console.warn('Supabase saveMenuCategory failed', e);
+    }
+  }
+
+  return { success: true, category: target };
+}
+
+export async function deleteMenuCategory(categoryId: string): Promise<boolean> {
+  const restaurantId = getCurrentRestaurantId();
+  const categories = getStoredMenuCategories(restaurantId);
+  const filtered = categories.filter(c => c.id !== categoryId);
+  saveStoredMenuCategories(filtered, restaurantId);
+
+  window.dispatchEvent(new CustomEvent('rbh_menu_categories_changed', { detail: { deletedId: categoryId } }));
+
+  const supabase = getSupabaseClient();
+  if (supabase) {
+    try {
+      await supabase.from('menu_categories').delete().eq('id', categoryId).eq('restaurant_id', restaurantId);
+    } catch (e) {
+      console.warn('Supabase deleteMenuCategory failed', e);
+    }
+  }
+
+  return true;
+}
+
+export function getStoredMenuSubcategories(restaurantId: string = getCurrentRestaurantId()): MenuSubcategory[] {
+  try {
+    const raw = localStorage.getItem(`${MENU_SUBCATEGORIES_STORAGE_KEY}_${restaurantId}`) || localStorage.getItem(MENU_SUBCATEGORIES_STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed;
+      }
+    }
+  } catch (e) {
+    console.error('Failed to get stored menu subcategories', e);
+  }
+  return DEFAULT_MENU_SUBCATEGORIES.map(s => ({ ...s, restaurant_id: restaurantId }));
+}
+
+export function saveStoredMenuSubcategories(subcategories: MenuSubcategory[], restaurantId: string = getCurrentRestaurantId()): void {
+  try {
+    localStorage.setItem(`${MENU_SUBCATEGORIES_STORAGE_KEY}_${restaurantId}`, JSON.stringify(subcategories));
+    localStorage.setItem(MENU_SUBCATEGORIES_STORAGE_KEY, JSON.stringify(subcategories));
+  } catch (e) {}
+}
+
+export async function fetchMenuSubcategories(restaurantId: string = getCurrentRestaurantId()): Promise<MenuSubcategory[]> {
+  const supabase = getSupabaseClient();
+  const local = getStoredMenuSubcategories(restaurantId);
+
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('menu_subcategories')
+        .select('*')
+        .eq('restaurant_id', restaurantId)
+        .order('display_order', { ascending: true });
+
+      if (!error && data && data.length > 0) {
+        const mapped: MenuSubcategory[] = data.map((row: any) => ({
+          id: String(row.id),
+          restaurant_id: row.restaurant_id || restaurantId,
+          categoryId: String(row.category_id || row.categoryId),
+          name: row.name,
+          description: row.description || '',
+          displayOrder: Number(row.display_order || 0),
+          isActive: row.is_active !== undefined ? Boolean(row.is_active) : true,
+          created_at: row.created_at,
+          updated_at: row.updated_at
+        }));
+        saveStoredMenuSubcategories(mapped, restaurantId);
+        return mapped;
+      }
+    } catch (e) {
+      console.warn('Supabase fetchMenuSubcategories fallback to local', e);
+    }
+  }
+  return local;
+}
+
+export async function saveMenuSubcategory(subcategory: Partial<MenuSubcategory>): Promise<{ success: boolean; subcategory: MenuSubcategory }> {
+  const restaurantId = subcategory.restaurant_id || getCurrentRestaurantId();
+  const subcategories = getStoredMenuSubcategories(restaurantId);
+  const now = new Date().toISOString();
+
+  let target: MenuSubcategory;
+  if (subcategory.id && subcategories.some(s => s.id === subcategory.id)) {
+    target = {
+      ...subcategories.find(s => s.id === subcategory.id)!,
+      ...subcategory,
+      restaurant_id: restaurantId,
+      updated_at: now
+    } as MenuSubcategory;
+    const updated = subcategories.map(s => s.id === subcategory.id ? target : s);
+    saveStoredMenuSubcategories(updated, restaurantId);
+  } else {
+    const newId = subcategory.id || `sub-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
+    target = {
+      id: newId,
+      restaurant_id: restaurantId,
+      categoryId: subcategory.categoryId || 'cat-biryani',
+      name: subcategory.name || 'New Subcategory',
+      description: subcategory.description || '',
+      displayOrder: subcategory.displayOrder !== undefined ? subcategory.displayOrder : subcategories.length + 1,
+      isActive: subcategory.isActive !== undefined ? Boolean(subcategory.isActive) : true,
+      created_at: now,
+      updated_at: now
+    };
+    subcategories.push(target);
+    saveStoredMenuSubcategories(subcategories, restaurantId);
+  }
+
+  window.dispatchEvent(new CustomEvent('rbh_menu_subcategories_changed', { detail: target }));
+
+  const supabase = getSupabaseClient();
+  if (supabase) {
+    try {
+      await supabase.from('menu_subcategories').upsert({
+        id: target.id,
+        restaurant_id: target.restaurant_id,
+        category_id: target.categoryId,
+        name: target.name,
+        description: target.description || null,
+        display_order: target.displayOrder,
+        is_active: target.isActive,
+        updated_at: now
+      }, { onConflict: 'id' });
+    } catch (e) {
+      console.warn('Supabase saveMenuSubcategory failed', e);
+    }
+  }
+
+  return { success: true, subcategory: target };
+}
+
+export async function deleteMenuSubcategory(subcategoryId: string): Promise<boolean> {
+  const restaurantId = getCurrentRestaurantId();
+  const subcategories = getStoredMenuSubcategories(restaurantId);
+  const filtered = subcategories.filter(s => s.id !== subcategoryId);
+  saveStoredMenuSubcategories(filtered, restaurantId);
+
+  window.dispatchEvent(new CustomEvent('rbh_menu_subcategories_changed', { detail: { deletedId: subcategoryId } }));
+
+  const supabase = getSupabaseClient();
+  if (supabase) {
+    try {
+      await supabase.from('menu_subcategories').delete().eq('id', subcategoryId).eq('restaurant_id', restaurantId);
+    } catch (e) {
+      console.warn('Supabase deleteMenuSubcategory failed', e);
+    }
+  }
+
+  return true;
+}
+
+// ============================================================================
+// PHASE 1: MENU ITEM ADVANCED CRUD & BULK IMPORT
+// ============================================================================
+
+export async function saveMenuItemToSupabase(item: Partial<MenuItem> & { Name: string }): Promise<{ success: boolean; item: MenuItem; error?: string }> {
+  const restaurantId = item.restaurant_id || getCurrentRestaurantId();
+  const config = getSupabaseConfig();
+  const supabase = getSupabaseClient();
+  const idStr = String(item.id || `dish-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`);
+
+  const fullItem: MenuItem = {
+    id: idStr,
+    restaurant_id: restaurantId,
+    Name: item.Name,
+    Price: Number(item.Price || 0),
+    basePrice: Number(item.basePrice || item.Price || 0),
+    Description: item.Description || '',
+    Image_url: item.Image_url || 'https://images.unsplash.com/photo-1563379091339-03b21ab4a4f8?w=800&auto=format&fit=crop&q=80',
+    Available: item.Available !== undefined ? item.Available : true,
+    category: item.category || 'Biryani Specials',
+    categoryId: item.categoryId,
+    subcategoryId: item.subcategoryId,
+    subcategoryName: item.subcategoryName,
+    isVeg: Boolean(item.isVeg),
+    vegType: item.vegType || (item.isVeg ? 'Veg' : 'Non-Veg'),
+    isSpicy: Boolean(item.isSpicy),
+    isBestSeller: Boolean(item.isBestSeller),
+    prepTime: item.prepTime || '15-20 mins',
+    sku: item.sku || undefined,
+    stockCount: typeof item.stockCount === 'number' ? item.stockCount : 50,
+    stockStatus: item.stockStatus || ((item.Available !== false) ? 'In Stock' : 'Out of Stock'),
+    variants: item.variants || [],
+    addons: item.addons || [],
+    brand: item.brand || undefined,
+    beverageType: item.beverageType || undefined,
+    volumeMl: typeof item.volumeMl === 'number' ? item.volumeMl : undefined,
+    servingSize: item.servingSize || undefined,
+    mrp: typeof item.mrp === 'number' ? item.mrp : undefined,
+    taxCategory: item.taxCategory || undefined,
+    displayOrder: item.displayOrder || 1,
+    is_archived: Boolean(item.is_archived),
+    created_at: item.created_at || new Date().toISOString()
+  };
+
+  // Update local cache
+  try {
+    const raw = localStorage.getItem(LOCAL_MENU_KEY);
+    let items: MenuItem[] = raw ? JSON.parse(raw) : [...DEFAULT_MENU_ITEMS];
+    const exists = items.some(i => String(i.id) === idStr);
+    if (exists) {
+      items = items.map(i => String(i.id) === idStr ? fullItem : i);
+    } else {
+      items.push(fullItem);
+    }
+    localStorage.setItem(LOCAL_MENU_KEY, JSON.stringify(items));
+  } catch (e) {
+    console.error('Failed to save to local cache', e);
+  }
+
+  // Update availability map
+  const availMap = getMenuAvailabilityMap();
+  availMap[idStr] = fullItem.Available;
+  saveMenuAvailabilityMap(availMap);
+
+  // Dispatch events
+  if (ordersBroadcastChannel) {
+    try {
+      ordersBroadcastChannel.postMessage({ type: 'MENU_ITEM_SAVED', item: fullItem });
+    } catch {}
+  }
+  window.dispatchEvent(new CustomEvent('rbh_menu_item_saved', { detail: fullItem }));
+  window.dispatchEvent(new Event('rbh_menu_updated'));
+
+  // Save to Supabase
+  if (supabase) {
+    try {
+      const payload: Record<string, any> = {
+        id: idStr,
+        restaurant_id: restaurantId,
+        name: fullItem.Name,
+        price: fullItem.Price,
+        base_price: fullItem.basePrice || fullItem.Price,
+        description: fullItem.Description,
+        image_url: fullItem.Image_url,
+        available: fullItem.Available,
+        category: fullItem.category || 'Biryani Specials',
+        category_id: fullItem.categoryId || null,
+        subcategory_id: fullItem.subcategoryId || null,
+        subcategory_name: fullItem.subcategoryName || null,
+        is_veg: Boolean(fullItem.isVeg),
+        veg_type: fullItem.vegType || (fullItem.isVeg ? 'Veg' : 'Non-Veg'),
+        is_spicy: Boolean(fullItem.isSpicy),
+        is_bestseller: Boolean(fullItem.isBestSeller),
+        prep_time: fullItem.prepTime || '15-20 mins',
+        stock_count: typeof fullItem.stockCount === 'number' ? fullItem.stockCount : 50,
+        stock_status: fullItem.stockStatus || (fullItem.Available ? 'In Stock' : 'Out of Stock'),
+        variants: fullItem.variants || [],
+        addons: fullItem.addons || [],
+        display_order: fullItem.displayOrder || 1,
+        is_archived: Boolean(fullItem.is_archived),
+        updated_at: new Date().toISOString()
+      };
+
+      const targetTable = config.tableName || 'menu_items';
+      const { error } = await supabase.from(targetTable).upsert(payload, { onConflict: 'id' });
+      if (error && targetTable !== 'menu_items') {
+        await supabase.from('menu_items').upsert(payload, { onConflict: 'id' });
+      }
+    } catch (e: any) {
+      console.warn('Supabase saveMenuItem failed', e.message);
+    }
+  }
+
+  return { success: true, item: fullItem };
+}
+
+export async function deleteMenuItemFromSupabase(itemId: string | number): Promise<boolean> {
+  const idStr = String(itemId);
+  const config = getSupabaseConfig();
+  const supabase = getSupabaseClient();
+
+  // Remove from local cache
+  try {
+    const raw = localStorage.getItem(LOCAL_MENU_KEY);
+    if (raw) {
+      let items: MenuItem[] = JSON.parse(raw);
+      items = items.filter(i => String(i.id) !== idStr);
+      localStorage.setItem(LOCAL_MENU_KEY, JSON.stringify(items));
+    }
+  } catch (e) {}
+
+  if (ordersBroadcastChannel) {
+    try {
+      ordersBroadcastChannel.postMessage({ type: 'MENU_ITEM_DELETED', itemId: idStr });
+    } catch {}
+  }
+  window.dispatchEvent(new CustomEvent('rbh_menu_item_deleted', { detail: { itemId: idStr } }));
+  window.dispatchEvent(new Event('rbh_menu_updated'));
+
+  if (supabase) {
+    try {
+      const targetTable = config.tableName || 'menu_items';
+      await supabase.from(targetTable).delete().eq('id', idStr);
+      await supabase.from('menu_items').delete().eq('id', idStr);
+    } catch (e) {
+      console.warn('Supabase deleteMenuItem failed', e);
+    }
+  }
+
+  return true;
+}
+
+export function parseCSVToBulkRows(csvText: string): BulkImportRow[] {
+  const lines = csvText.split(/\r?\n/).filter(line => line.trim().length > 0);
+  if (lines.length <= 1) return [];
+
+  const headers = lines[0].split(',').map(h => h.trim().toLowerCase().replace(/[^a-z0-9]/g, ''));
+  const rows: BulkImportRow[] = [];
+
+  for (let i = 1; i < lines.length; i++) {
+    const line = lines[i];
+    const values: string[] = [];
+    let insideQuote = false;
+    let currentValue = '';
+
+    for (let j = 0; j < line.length; j++) {
+      const char = line[j];
+      if (char === '"' || char === "'") {
+        insideQuote = !insideQuote;
+      } else if (char === ',' && !insideQuote) {
+        values.push(currentValue.trim());
+        currentValue = '';
+      } else {
+        currentValue += char;
+      }
+    }
+    values.push(currentValue.trim());
+
+    const getVal = (possibleHeaders: string[]): string => {
+      for (const h of possibleHeaders) {
+        const idx = headers.findIndex(hdr => hdr.includes(h));
+        if (idx !== -1 && values[idx] !== undefined) {
+          return values[idx].replace(/^["']|["']$/g, '').trim();
+        }
+      }
+      return '';
+    };
+
+    rows.push({
+      category: getVal(['category', 'cat']),
+      subcategory: getVal(['subcategory', 'subcat', 'section']),
+      itemName: getVal(['itemname', 'name', 'item', 'dish']),
+      description: getVal(['description', 'desc', 'details']),
+      vegNonVeg: getVal(['vegnonveg', 'veg', 'type', 'diet', 'dietary']),
+      variant: getVal(['variant', 'variants', 'portion', 'size', 'portions']),
+      unit: getVal(['unit', 'measure', 'uom']),
+      price: getVal(['price', 'rate', 'cost', 'amount', 'baseprice']),
+      sku: getVal(['sku', 'itemcode', 'item_code', 'code']),
+      active: getVal(['active', 'status', 'available', 'isactive', 'availability']),
+      imageUrl: getVal(['image', 'imageurl', 'image_url', 'photo']),
+      prepTime: getVal(['preptime', 'prep_time', 'time', 'duration']),
+      addon: getVal(['addon', 'addons', 'extras', 'add_on']),
+      brand: getVal(['brand', 'brandname']),
+      beverageType: getVal(['beveragetype', 'beverage_type', 'drinktype', 'beverage']),
+      servingSize: getVal(['servingsize', 'serving_size', 'serving']),
+      mrp: getVal(['mrp', 'maxretailprice']),
+      taxCategory: getVal(['taxcategory', 'tax_category', 'tax'])
+    });
+  }
+
+  return rows;
+}
+
+export function validateBulkImportRows(input: BulkImportRow[] | string): ImportValidationResult {
+  const rows = typeof input === 'string' ? parseCSVToBulkRows(input) : input;
+  const validItems: Partial<MenuItem>[] = [];
+  const errors: { row: number; field: string; message: string; data?: any }[] = [];
+  const seenSKUs = new Set<string>();
+
+  const validUnits = ['pcs', 'g', 'kg', 'ml', 'L', 'portion', 'size', 'can', 'bottle', 'plate', 'piece', 'half', 'full', 'peg', 'glass'];
+
+  rows.forEach((row, index) => {
+    const rowNum = index + 1;
+    let rowHasError = false;
+
+    const name = (row.itemName || '').trim();
+    const category = (row.category || '').trim();
+    const subcategory = (row.subcategory || '').trim();
+    const sku = (row.sku || '').trim();
+    const rawPriceTrimmed = String(row.price || '').trim();
+    const cleanedPriceStr = rawPriceTrimmed.replace(/^[₹$]|^(rs\.?|inr)\s*/i, '').trim();
+    const priceNum = cleanedPriceStr === '' ? NaN : Number(cleanedPriceStr);
+    const variantStr = (row.variant || '').trim();
+    const addonStr = (row.addon || '').trim();
+    const rawUnit = (row.unit || '').trim().toLowerCase();
+    const isVegStr = (row.vegNonVeg || '').trim().toLowerCase();
+    const rawMrpTrimmed = String(row.mrp || '').trim();
+    const cleanedMrpStr = rawMrpTrimmed.replace(/^[₹$]|^(rs\.?|inr)\s*/i, '').trim();
+    const mrpNum = cleanedMrpStr && !isNaN(Number(cleanedMrpStr)) ? Number(cleanedMrpStr) : undefined;
+
+    // 1. Validate Item Name
+    if (!name) {
+      errors.push({ row: rowNum, field: 'Item Name', message: 'Item name is required and cannot be empty.' });
+      rowHasError = true;
+    }
+
+    // 2. Validate Category
+    if (!category) {
+      errors.push({ row: rowNum, field: 'Category', message: 'Category is required and cannot be empty.' });
+      rowHasError = true;
+    }
+
+    // 3. Validate Price
+    if (isNaN(priceNum) || priceNum <= 0) {
+      errors.push({ row: rowNum, field: 'Price', message: `Invalid price "${row.price}". Price must be a valid positive number greater than 0.` });
+      rowHasError = true;
+    }
+
+    // 4. Validate SKU for duplicates
+    if (sku) {
+      if (seenSKUs.has(sku.toLowerCase())) {
+        errors.push({ row: rowNum, field: 'SKU', message: `Duplicate SKU "${sku}" detected. Each item code/SKU must be unique.` });
+        rowHasError = true;
+      } else {
+        seenSKUs.add(sku.toLowerCase());
+      }
+    }
+
+    // 5. Parse Variants
+    let variants: MenuItemVariant[] | undefined = undefined;
+    if (variantStr) {
+      // Support multi-variant delimiter: "Half:180|Full:320" or "30ml:150:peg|60ml:280:peg"
+      if (variantStr.includes(':') || variantStr.includes('|')) {
+        const parts = variantStr.split('|').map(p => p.trim()).filter(Boolean);
+        const parsedVars: MenuItemVariant[] = [];
+        for (const part of parts) {
+          const subParts = part.split(':').map(s => s.trim());
+          const vName = subParts[0];
+          const vPrice = parseFloat(subParts[1] || '0');
+          const vUnit = (subParts[2] || rawUnit || 'portion').toLowerCase() as any;
+
+          if (!vName || isNaN(vPrice) || vPrice <= 0) {
+            errors.push({ row: rowNum, field: 'Variant', message: `Invalid variant entry "${part}". Expected format "Name:Price" (e.g. "Half:180").` });
+            rowHasError = true;
+          } else {
+            parsedVars.push({
+              id: `var-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+              name: vName,
+              price: vPrice,
+              unit: validUnits.includes(vUnit) ? vUnit : 'portion',
+              isDefault: parsedVars.length === 0,
+              available: true
+            });
+          }
+        }
+        if (parsedVars.length > 0) {
+          variants = parsedVars;
+        }
+      } else {
+        // Single variant name in column
+        let unit = rawUnit;
+        if (unit && !validUnits.includes(unit)) {
+          if (unit.includes('ml')) unit = 'ml';
+          else if (unit.includes('kg')) unit = 'kg';
+          else if (unit.includes('gm') || unit.includes('g')) unit = 'g';
+          else if (unit.includes('pc')) unit = 'pcs';
+          else if (unit.includes('plate')) unit = 'plate';
+          else unit = 'portion';
+        }
+
+        variants = [{
+          id: `var-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          name: variantStr,
+          unit: (unit as any) || 'portion',
+          price: priceNum || 0,
+          isDefault: true,
+          available: true
+        }];
+      }
+    }
+
+    // 6. Parse Addons
+    let addons: MenuItemAddon[] | undefined = undefined;
+    if (addonStr) {
+      const addonParts = addonStr.split('|').map(a => a.trim()).filter(Boolean);
+      const parsedAddons: MenuItemAddon[] = [];
+      for (const aPart of addonParts) {
+        const sub = aPart.split(':').map(s => s.trim());
+        const aName = sub[0];
+        const aPrice = parseFloat(sub[1] || '0');
+        const aVeg = sub[2] ? sub[2].toLowerCase().includes('veg') && !sub[2].toLowerCase().includes('non') : true;
+
+        if (!aName || isNaN(aPrice) || aPrice < 0) {
+          errors.push({ row: rowNum, field: 'Addon', message: `Invalid add-on entry "${aPart}". Expected format "Name:Price" (e.g. "Extra Cheese:50").` });
+          rowHasError = true;
+        } else {
+          parsedAddons.push({
+            id: `add-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+            name: aName,
+            price: aPrice,
+            isVeg: aVeg,
+            available: true
+          });
+        }
+      }
+      if (parsedAddons.length > 0) {
+        addons = parsedAddons;
+      }
+    }
+
+    // 7. Validate Dietary Type
+    const isVegan = isVegStr.includes('vegan');
+    const isEgg = isVegStr.includes('egg');
+    const isVeg = isVegan || (isVegStr.includes('veg') && !isVegStr.includes('non'));
+    const vegType: 'Veg' | 'Non-Veg' | 'Vegan' | 'Egg' = isVegan ? 'Vegan' : (isEgg ? 'Egg' : (isVeg ? 'Veg' : 'Non-Veg'));
+
+    const activeBool = row.active === undefined || row.active === '' || String(row.active).toLowerCase() === 'true' || String(row.active).toLowerCase() === 'yes' || String(row.active) === '1';
+
+    if (!rowHasError) {
+      validItems.push({
+        id: `imp-${Date.now()}-${Math.random().toString(36).substring(2, 7)}-${index}`,
+        Name: name,
+        category,
+        subcategoryName: subcategory || undefined,
+        Description: (row.description || '').trim() || `${name} prepared in royal traditional recipe`,
+        Price: priceNum,
+        basePrice: priceNum,
+        sku: sku || undefined,
+        Image_url: (row.imageUrl || '').trim() || 'https://images.unsplash.com/photo-1563379091339-03b21ab4a4f8?w=800&auto=format&fit=crop&q=80',
+        Available: activeBool,
+        isVeg,
+        vegType,
+        stockStatus: activeBool ? 'In Stock' : 'Out of Stock',
+        stockCount: activeBool ? 50 : 0,
+        variants,
+        addons,
+        brand: (row.brand || '').trim() || undefined,
+        beverageType: (row.beverageType || '').trim() || undefined,
+        servingSize: (row.servingSize || '').trim() || undefined,
+        mrp: mrpNum,
+        taxCategory: (row.taxCategory || '').trim() || undefined,
+        prepTime: (row.prepTime || '').trim() || '15-20 mins'
+      });
+    }
+  });
+
+  return {
+    totalRows: rows.length,
+    validCount: validItems.length,
+    errorCount: errors.length,
+    errors,
+    validItems
+  };
+}
+
+export async function bulkImportMenuItems(input: Partial<MenuItem>[] | string): Promise<{ success: boolean; importedCount: number; categoriesCount: number; error?: string }> {
+  let items: Partial<MenuItem>[] = [];
+  if (typeof input === 'string') {
+    const validation = validateBulkImportRows(input);
+    if (validation.validCount === 0 && validation.totalRows > 0) {
+      return { 
+        success: false, 
+        importedCount: 0, 
+        categoriesCount: 0, 
+        error: `Import failed: ${validation.errors.length} errors found across rows. Please fix errors and re-upload.` 
+      };
+    }
+    items = validation.validItems;
+  } else {
+    items = input;
+  }
+
+  const restaurantId = getCurrentRestaurantId();
+  const rawMenu = localStorage.getItem(LOCAL_MENU_KEY);
+  let currentMenu: MenuItem[] = rawMenu ? JSON.parse(rawMenu) : [...DEFAULT_MENU_ITEMS];
+
+  const categorySet = new Set<string>();
+
+  const prepared: MenuItem[] = items.map((it, idx) => {
+    const catName = it.category || 'Biryani Specials';
+    categorySet.add(catName);
+
+    return {
+      id: it.id || `item-bulk-${Date.now()}-${idx}`,
+      restaurant_id: restaurantId,
+      Name: it.Name || 'New Dish',
+      Price: it.Price || 200,
+      basePrice: it.basePrice || it.Price || 200,
+      Description: it.Description || '',
+      Image_url: it.Image_url || 'https://images.unsplash.com/photo-1563379091339-03b21ab4a4f8?w=800&auto=format&fit=crop&q=80',
+      Available: it.Available !== undefined ? it.Available : true,
+      category: catName,
+      categoryId: it.categoryId,
+      subcategoryId: it.subcategoryId,
+      subcategoryName: it.subcategoryName,
+      isVeg: Boolean(it.isVeg),
+      vegType: it.vegType || (it.isVeg ? 'Veg' : 'Non-Veg'),
+      isSpicy: Boolean(it.isSpicy),
+      isBestSeller: Boolean(it.isBestSeller),
+      prepTime: it.prepTime || '15-20 mins',
+      sku: it.sku,
+      brand: it.brand,
+      beverageType: it.beverageType,
+      volumeMl: it.volumeMl,
+      servingSize: it.servingSize,
+      mrp: it.mrp,
+      taxCategory: it.taxCategory,
+      stockCount: it.stockCount || 50,
+      stockStatus: it.stockStatus || 'In Stock',
+      variants: it.variants || [],
+      addons: it.addons || [],
+      displayOrder: currentMenu.length + idx + 1,
+      created_at: new Date().toISOString()
+    };
+  });
+
+  // Ensure new categories are registered
+  const existingCategories = getStoredMenuCategories(restaurantId);
+  let newCatsCount = 0;
+  for (const cat of Array.from(categorySet)) {
+    if (!existingCategories.some(c => c.name.toLowerCase() === cat.toLowerCase())) {
+      await saveMenuCategory({ name: cat, restaurant_id: restaurantId });
+      newCatsCount++;
+    }
+  }
+
+  // Append to local menu
+  currentMenu = [...currentMenu, ...prepared];
+  try {
+    localStorage.setItem(LOCAL_MENU_KEY, JSON.stringify(currentMenu));
+  } catch (e) {}
+
+  // Update availability map
+  const availMap = getMenuAvailabilityMap();
+  prepared.forEach(item => {
+    availMap[String(item.id)] = item.Available;
+  });
+  saveMenuAvailabilityMap(availMap);
+
+  // Dispatch events
+  if (ordersBroadcastChannel) {
+    try {
+      ordersBroadcastChannel.postMessage({ type: 'BULK_MENU_IMPORTED', count: prepared.length });
+    } catch {}
+  }
+  window.dispatchEvent(new CustomEvent('rbh_menu_bulk_imported', { detail: { count: prepared.length } }));
+  window.dispatchEvent(new Event('rbh_menu_updated'));
+
+  // Save each to Supabase in background
+  const supabase = getSupabaseClient();
+  if (supabase) {
+    try {
+      const config = getSupabaseConfig();
+      const targetTable = config.tableName || 'menu_items';
+      const rows = prepared.map(item => ({
+        id: String(item.id),
+        restaurant_id: restaurantId,
+        name: item.Name,
+        price: item.Price,
+        base_price: item.basePrice || item.Price,
+        description: item.Description,
+        image_url: item.Image_url,
+        available: item.Available,
+        category: item.category,
+        category_id: item.categoryId || null,
+        subcategory_id: item.subcategoryId || null,
+        subcategory_name: item.subcategoryName || null,
+        is_veg: Boolean(item.isVeg),
+        veg_type: item.vegType,
+        is_spicy: Boolean(item.isSpicy),
+        is_bestseller: Boolean(item.isBestSeller),
+        prep_time: item.prepTime,
+        stock_count: item.stockCount,
+        stock_status: item.stockStatus,
+        variants: item.variants,
+        addons: item.addons,
+        display_order: item.displayOrder,
+        is_archived: false,
+        updated_at: new Date().toISOString()
+      }));
+
+      await supabase.from(targetTable).upsert(rows, { onConflict: 'id' });
+    } catch (e) {
+      console.warn('Supabase bulk upsert failed', e);
+    }
+  }
+
+  return { success: true, importedCount: prepared.length, categoriesCount: newCatsCount };
+}
+
+export function exportMenuItemsToCSV(items: MenuItem[]): string {
+  const headers = [
+    'Category',
+    'Subcategory',
+    'Item Name',
+    'Description',
+    'Price',
+    'Veg / Non-Veg',
+    'SKU',
+    'Available',
+    'Variants',
+    'Add-ons',
+    'Brand',
+    'Beverage Type',
+    'Serving Size',
+    'MRP',
+    'Tax Category',
+    'Prep Time',
+    'Image URL'
+  ];
+
+  const escapeCSV = (str: string = '') => {
+    if (str.includes(',') || str.includes('"') || str.includes('\n') || str.includes('|')) {
+      return `"${str.replace(/"/g, '""')}"`;
+    }
+    return str;
+  };
+
+  const rows = items.map(item => {
+    const variantStr = (item.variants || [])
+      .map(v => `${v.name}:${v.price}${v.unit ? `:${v.unit}` : ''}`)
+      .join('|');
+
+    const addonStr = (item.addons || [])
+      .map(a => `${a.name}:${a.price}`)
+      .join('|');
+
+    return [
+      escapeCSV(item.category || ''),
+      escapeCSV(item.subcategoryName || ''),
+      escapeCSV(item.Name || ''),
+      escapeCSV(item.Description || ''),
+      item.Price || 0,
+      item.vegType || (item.isVeg ? 'Veg' : 'Non-Veg'),
+      escapeCSV(item.sku || ''),
+      item.Available ? 'TRUE' : 'FALSE',
+      escapeCSV(variantStr),
+      escapeCSV(addonStr),
+      escapeCSV(item.brand || ''),
+      escapeCSV(item.beverageType || ''),
+      escapeCSV(item.servingSize || ''),
+      item.mrp || '',
+      escapeCSV(item.taxCategory || ''),
+      escapeCSV(item.prepTime || '15-20 mins'),
+      escapeCSV(item.Image_url || '')
+    ].join(',');
+  });
+
+  return [headers.join(','), ...rows].join('\n');
+}
+
+export function generateSampleMenuCSVTemplate(): string {
+  return `Category,Subcategory,Item Name,Description,Price,Veg / Non-Veg,SKU,Available,Variants,Add-ons,Brand,Beverage Type,Serving Size,MRP,Tax Category,Prep Time
+Biryani Specials,Dum Biryani,Shahi Chicken Dum Biryani,Aromatic long grain basmati rice dum cooked with fresh chicken & royal spices,320,Non-Veg,RBH-BIR-001,TRUE,Half:180:portion|Full:320:portion|Family Handi:690:portion,Extra Gravy:40|Raita:30|Boiled Egg:20,,,Portion,350,standard,20 mins
+Biryani Specials,Dum Biryani,Awadhi Gosht Mutton Biryani,Melt-in-mouth tender goat meat layered with saffron and royal Awadhi masala,420,Non-Veg,RBH-BIR-002,TRUE,Half:240:portion|Full:420:portion|Handi:850:portion,Extra Gravy:40|Double Masala:35,,,Portion,450,standard,25 mins
+Biryani Specials,Handi Specials,Paneer Tikka Dum Biryani,Charcoal roasted paneer cubes tossed in rich dum gravy with basmati rice,260,Veg,RBH-BIR-003,TRUE,Half:150:portion|Full:260:portion,Extra Paneer:50|Boondi Raita:30,,,Portion,280,standard,15 mins
+Starters & Tandoor,Tandoori Kebabs,Murgh Malai Tikka,Creamy boneless chicken kebabs marinated in cashew paste and cardamom,340,Non-Veg,RBH-STR-001,TRUE,6 Pieces:210:pcs|12 Pieces:340:pcs,Extra Mint Dip:20|Lachha Onion:15,,,Plate,360,standard,15 mins
+Starters & Tandoor,Tandoori Kebabs,Galouti Kebab Melt,Lucknowi lamb patties smoked with cloves and rose water,380,Non-Veg,RBH-STR-002,TRUE,4 Pieces:230:pcs|8 Pieces:380:pcs,Ulta Tawa Paratha:40|Mint Sauce:20,,,Plate,400,standard,15 mins
+Starters & Tandoor,Tikka Specials,Dahi Ke Kebab,Crispy hung curd cutlets flavored with green chillies and fresh coriander,240,Veg,RBH-STR-003,TRUE,6 Pieces:240:pcs,Mint Chutney:20,,,Plate,260,standard,12 mins
+Starters & Tandoor,Tandoori Kebabs,Crispy Vegan Corn Tikki,Golden crisp spiced sweet corn and herb patties,220,Vegan,RBH-STR-004,TRUE,6 Pieces:220:pcs,Sweet Chilli Dip:20,,,Plate,240,standard,12 mins
+Royal Curries,Chicken Curries,Murgh Makhani Butter Chicken,Slow-simmered tandoori chicken in velvety tomato and butter gravy,340,Non-Veg,RBH-CUR-001,TRUE,Half:210:portion|Full:340:portion,Extra Butter:25|Extra Gravy:45,,,Portion,360,standard,15 mins
+Royal Curries,Mutton & Meat,Nalli Nihari Gosht,Overnight slow-cooked lamb shanks infused with traditional potli spices,460,Non-Veg,RBH-CUR-002,TRUE,Single Shank:260:portion|Double Shank:460:portion,Ginger & Green Chilli Garnish:15,,,Portion,490,standard,20 mins
+Royal Curries,Paneer & Vegetarian,Shahi Paneer Khas,Cottage cheese triangles in sweet almond and cashew saffron gravy,280,Veg,RBH-CUR-003,TRUE,Half:160:portion|Full:280:portion,Extra Cream:20,,,Portion,300,standard,15 mins
+Breads & Rice,Tandoori Breads,Butter Garlic Naan,Clay oven leavened bread brushed with melted butter and fresh garlic,65,Veg,RBH-BRD-001,TRUE,1 Piece:65:pcs|2 Pieces:120:pcs,Extra Garlic Butter:15,,,Piece,75,standard,8 mins
+Breads & Rice,Tandoori Breads,Khamiri Roti,Soft traditional Mughlai yeast fermented tandoori bread,50,Vegan,RBH-BRD-002,TRUE,1 Piece:50:pcs|2 Pieces:95:pcs,,,,Piece,60,standard,8 mins
+Beverages,Alcohol & Spirits,Single Malt Scotch 12YO,Speyside single malt matured in oak casks with honeyed notes,380,Veg,RBH-ALC-001,TRUE,30ml Peg:380:peg|60ml Large:690:peg|Bottle 750ml:7500:bottle,Soda:30|Tonic Water:60,Glenfiddich,Whiskey,30ml Peg,420,liquor,5 mins
+Beverages,Alcohol & Spirits,Premium Craft Draught Beer,Crisp Belgian style wheat beer with citrus orange peel notes,290,Veg,RBH-ALC-002,TRUE,330ml Pint:290:glass|500ml Mug:420:glass|Pitcher 1.5L:1150:can,Salted Peanuts:40|Masala Fries:80,Bira 91,Beer,330ml Pint,320,liquor,5 mins
+Beverages,Alcohol & Spirits,Aged Dark Rum,Caribbean recipe dark rum with vanilla and caramel notes,190,Veg,RBH-ALC-003,TRUE,30ml Peg:190:peg|60ml Large:340:peg|Bottle 750ml:3800:bottle,Cola Can:40|Water Bottle:20,Old Monk,Rum,30ml Peg,220,liquor,5 mins
+Beverages,Lassi & Mocktails,Royal Kesaria Malai Lassi,Hand-churned creamy sweetened curd infused with saffron and pistachios,120,Veg,RBH-BEV-001,TRUE,Glass 300ml:120:glass|Large 500ml:180:glass,Extra Dry Fruits:30|Rabri Scoop:40,,,Glass,140,standard,5 mins
+Beverages,Lassi & Mocktails,Fresh Mint Lime Soda,Sparkling chilled soda with freshly squeezed lemon juice and mint,80,Vegan,RBH-BEV-002,TRUE,Sweet:80:glass|Salted:80:glass|Mixed:85:glass,,,,Glass,90,standard,5 mins
+Beverages & Desserts,Mughlai Desserts,Shahi Tukda Awadhi,Ghee-fried crisp bread soaked in saffron syrup topped with thick rabri,140,Veg,RBH-DES-001,TRUE,2 Pieces:140:pcs|4 Pieces:260:pcs,Extra Rabri:40,,,Plate,160,standard,5 mins
+Beverages & Desserts,Mughlai Desserts,Kesariya Gulab Jamun,Warm khoya dumplings stuffed with pistachio and cardamom in rose syrup,110,Veg,RBH-DES-002,TRUE,2 Pieces:110:pcs|4 Pieces:200:pcs,Vanilla Ice Cream Scoop:40,,,Plate,130,standard,5 mins
+Accompaniments,Sides & Salads,Mirchi Ka Salan,Traditional Hyderabadi peanut sesame and bhavnagri chilli gravy,90,Veg,RBH-ACC-001,TRUE,Portion:90:portion,,,,Portion,100,standard,5 mins`;
+}
+
 // Orders management (local + synchronized with Supabase if table exists)
 const CUSTOMER_ACTIVE_ORDER_KEY = 'rbh_customer_active_order_id';
 
@@ -746,12 +2028,42 @@ export function mapSupabaseRowToOrder(row: Record<string, any>): Order {
   const subtotal = Number(row.subtotal ?? 0);
   const tax = Number(row.tax ?? 0);
   const total = Number(row.total ?? (subtotal + tax));
-  const paidAmount = typeof row.paid_amount === 'number' 
-    ? row.paid_amount 
-    : Number(row.paid_amount ?? (row.payment_status === 'Paid' ? total : 0));
-  const remainingAmount = typeof row.remaining_amount === 'number' 
-    ? row.remaining_amount 
-    : Math.max(0, total - paidAmount);
+
+  const rawPaymentStatus = String(row.payment_status || row.paymentStatus || (row.is_paid ? 'Paid' : 'Pending')).trim();
+  const isPaidNormalized = rawPaymentStatus.toLowerCase() === 'paid' || Boolean(row.is_paid);
+
+  let paidAmount = 0;
+  if (typeof row.paid_amount === 'number' && !isNaN(row.paid_amount)) {
+    paidAmount = row.paid_amount;
+  } else if (typeof row.paidAmount === 'number' && !isNaN(row.paidAmount)) {
+    paidAmount = row.paidAmount;
+  } else if (isPaidNormalized) {
+    paidAmount = total;
+  }
+
+  // If status is marked Paid, ensure paidAmount is at least total
+  if (isPaidNormalized && paidAmount < total) {
+    paidAmount = total;
+  }
+
+  let remainingAmount = 0;
+  if (isPaidNormalized) {
+    remainingAmount = 0;
+  } else if (typeof row.remaining_amount === 'number' && !isNaN(row.remaining_amount)) {
+    remainingAmount = row.remaining_amount;
+  } else if (typeof row.remainingAmount === 'number' && !isNaN(row.remainingAmount)) {
+    remainingAmount = row.remainingAmount;
+  } else {
+    remainingAmount = Math.max(0, total - paidAmount);
+  }
+
+  if ((paidAmount >= total && total > 0) || (remainingAmount <= 0.05 && total > 0 && paidAmount > 0)) {
+    remainingAmount = 0;
+  }
+
+  const finalPaymentStatus: Order['paymentStatus'] = (isPaidNormalized || (remainingAmount <= 0.05 && total > 0 && paidAmount > 0))
+    ? 'Paid'
+    : (paidAmount > 0 ? 'Partially Paid' : 'Pending');
 
   return {
     id: orderId,
@@ -775,12 +2087,12 @@ export function mapSupabaseRowToOrder(row: Record<string, any>): Order {
     total: isNaN(total) ? 0 : total,
     status: (row.status || 'New') as Order['status'],
     paymentMethod: row.payment_method || row.paymentMethod || 'Pay at Counter',
-    paymentStatus: (row.payment_status || row.paymentStatus || 'Pending') as Order['paymentStatus'],
+    paymentStatus: finalPaymentStatus,
     paymentMode: (row.payment_mode || row.paymentMode || 'UPI') as Order['paymentMode'],
     paidAmount: isNaN(paidAmount) ? 0 : paidAmount,
     remainingAmount: isNaN(remainingAmount) ? 0 : remainingAmount,
     paymentHistory: parsedPaymentHistory,
-    paidAt: row.paid_at || row.paidAt,
+    paidAt: row.paid_at || row.paidAt || (finalPaymentStatus === 'Paid' ? (row.updated_at || row.created_at) : undefined),
     customerName: row.customer_name || row.customerName,
     customerNotes: row.customer_notes || row.customerNotes,
     createdAt: row.created_at || row.createdAt || new Date().toISOString(),
@@ -950,16 +2262,8 @@ export async function saveOrder(order: Order, restaurantId?: string): Promise<Or
       console.warn('Supabase saveOrder notice:', err);
     }
 
-    try {
-      const channel = supabase.channel(`restaurant_${currentRid}`);
-      channel.send({
-        type: 'broadcast',
-        event: 'new_order',
-        payload: finalOrder
-      });
-    } catch (e) {
-      // Ignore
-    }
+    const channelName = getOrdersRealtimeChannelName(currentRid);
+    await sendSupabaseBroadcast(channelName, 'new_order', finalOrder);
   }
 
   window.dispatchEvent(new CustomEvent('rbh_new_order', { detail: finalOrder }));
@@ -975,37 +2279,39 @@ export async function updateOrderStatus(orderId: string, status: Order['status']
   const updated = current.map(o => o.id === orderId ? { ...o, status } : o);
   saveStoredOrders(updated, restaurantId);
 
-  // Update in Supabase scoped by restaurant_id and await write completion
+  // Update in Supabase via secure RPC scoped by restaurant_id and await write completion
   const supabase = getSupabaseClient();
   if (supabase) {
     try {
-      const { error } = await supabase
-        .from('royal_orders')
-        .update({ status, updated_at: new Date().toISOString() })
-        .eq('order_id', orderId)
-        .eq('restaurant_id', restaurantId);
+      // Primary: Use secure stored procedure kds_advance_order_status (validates restaurant_id and status enum)
+      const { data: rpcData, error: rpcError } = await supabase.rpc('kds_advance_order_status', {
+        p_order_id: orderId,
+        p_restaurant_id: restaurantId,
+        p_next_status: status
+      });
 
-      if (error) {
-        await supabase
-          .from('orders')
+      if (rpcError) {
+        // Fallback: If RPC is not yet created or fails, attempt direct UPDATE (for authenticated sessions)
+        const { error } = await supabase
+          .from('royal_orders')
           .update({ status, updated_at: new Date().toISOString() })
           .eq('order_id', orderId)
           .eq('restaurant_id', restaurantId);
+
+        if (error) {
+          await supabase
+            .from('orders')
+            .update({ status, updated_at: new Date().toISOString() })
+            .eq('order_id', orderId)
+            .eq('restaurant_id', restaurantId);
+        }
       }
     } catch (err) {
       console.warn('Supabase updateOrderStatus error:', err);
     }
 
-    try {
-      const channel = supabase.channel(`restaurant_${restaurantId}`);
-      channel.send({
-        type: 'broadcast',
-        event: 'order_status_updated',
-        payload: { orderId, status, restaurantId }
-      });
-    } catch (e) {
-      // Ignore
-    }
+    const channelName = getOrdersRealtimeChannelName(restaurantId);
+    await sendSupabaseBroadcast(channelName, 'order_status_updated', { orderId, status, restaurantId });
   }
 
   // Dispatch events AFTER Supabase is updated so that listener refetches see the newest data
@@ -1031,6 +2337,7 @@ export async function archiveOrder(orderId: string, restaurantId: string = getCu
     try {
       await supabase.from('royal_orders').update({ is_archived: true }).eq('order_id', orderId).eq('restaurant_id', restaurantId);
     } catch (e) {}
+    sendSupabaseBroadcast(getOrdersRealtimeChannelName(restaurantId), 'order_status_updated', { orderId, status: 'Archived', is_archived: true, restaurantId });
   }
 
   window.dispatchEvent(new CustomEvent('rbh_order_status_updated', { detail: { orderId, is_archived: true, restaurantId } }));
@@ -1055,10 +2362,90 @@ export async function cancelOrder(orderId: string, reason?: string, restaurantId
     try {
       await supabase.from('royal_orders').update({ status: 'Cancelled' }).eq('order_id', orderId).eq('restaurant_id', restaurantId);
     } catch (e) {}
+    sendSupabaseBroadcast(getOrdersRealtimeChannelName(restaurantId), 'order_status_updated', { orderId, status: 'Cancelled', restaurantId });
   }
 
   window.dispatchEvent(new CustomEvent('rbh_order_status_updated', { detail: { orderId, status: 'Cancelled', restaurantId } }));
   return updatedOrder;
+}
+
+// ----------------------------------------------------
+// SUPABASE REALTIME BROADCAST & CHANNEL HELPERS
+// ----------------------------------------------------
+
+/**
+ * Returns the standardized channel topic for multi-tenant orders real-time synchronization.
+ */
+export function getOrdersRealtimeChannelName(restaurantId: string = getCurrentRestaurantId()): string {
+  return `royal_orders_realtime_${restaurantId || DEFAULT_RESTAURANT_ID}`;
+}
+
+/**
+ * Safely dispatches a Supabase Realtime broadcast message without triggering deprecation warnings.
+ * - When an active WebSocket channel for the topic is subscribed and joined, pushes via WebSocket `channel.send({ type: 'broadcast', event, payload })`.
+ * - When the WebSocket is not joined / not subscribed, explicitly uses `channel.httpSend(event, payload)` for REST broadcast delivery.
+ * - Fully eliminates implicit REST fallback warnings while preserving real-time KDS, counter, badge, and order synchronization.
+ */
+export async function sendSupabaseBroadcast(
+  channelOrName: string | any,
+  event: string,
+  payload: any
+): Promise<void> {
+  const supabase = getSupabaseClient();
+  if (!supabase) return;
+
+  try {
+    let targetChannel: any = typeof channelOrName === 'string' ? null : channelOrName;
+    const channelName: string = typeof channelOrName === 'string' 
+      ? channelOrName 
+      : (channelOrName?.topic?.replace(/^realtime:/, '') || getOrdersRealtimeChannelName());
+
+    // Check if the global singleton channel matches this topic and is currently joined
+    if (!targetChannel && singletonSupabaseChannel) {
+      const singletonTopic = singletonSupabaseChannel.topic?.replace(/^realtime:/, '');
+      const isSingletonJoined = singletonSupabaseChannel.state === 'joined';
+      const singletonCanPush = typeof singletonSupabaseChannel.canPush === 'function' 
+        ? singletonSupabaseChannel.canPush() 
+        : (singletonSupabaseChannel.channelAdapter && typeof singletonSupabaseChannel.channelAdapter.canPush === 'function' ? singletonSupabaseChannel.channelAdapter.canPush() : false);
+
+      if (singletonTopic === channelName && (isSingletonJoined || singletonCanPush)) {
+        targetChannel = singletonSupabaseChannel;
+      }
+    }
+
+    // If no active channel, get or create the channel from client
+    if (!targetChannel) {
+      targetChannel = supabase.channel(channelName);
+    }
+
+    if (!targetChannel) return;
+
+    // Check if channel is connected to WebSocket and ready to push
+    const isJoined = targetChannel.state === 'joined';
+    const canPush = typeof targetChannel.canPush === 'function'
+      ? targetChannel.canPush()
+      : (targetChannel.channelAdapter && typeof targetChannel.channelAdapter.canPush === 'function' ? targetChannel.channelAdapter.canPush() : false);
+
+    if (isJoined || canPush) {
+      // Direct WebSocket transmission over connected channel
+      await targetChannel.send({
+        type: 'broadcast',
+        event,
+        payload
+      });
+    } else if (typeof targetChannel.httpSend === 'function') {
+      // Explicit REST delivery avoiding the deprecated implicit send() fallback
+      await targetChannel.httpSend(event, payload, { timeout: 3000 }).catch(() => {});
+    } else {
+      await targetChannel.send({
+        type: 'broadcast',
+        event,
+        payload
+      }).catch(() => {});
+    }
+  } catch (err) {
+    // Non-blocking broadcast error handling
+  }
 }
 
 // Subscribe to realtime order events (Supabase realtime, BroadcastChannel, storage events)
@@ -1123,7 +2510,7 @@ function initGlobalRealtimeIfNeeded() {
   const supabase = getSupabaseClient();
   if (supabase && !singletonSupabaseChannel) {
     try {
-      const channelName = `royal_orders_realtime_${getCurrentRestaurantId()}`;
+      const channelName = getOrdersRealtimeChannelName(getCurrentRestaurantId());
       singletonSupabaseChannel = supabase
         .channel(channelName)
         .on(
@@ -1169,6 +2556,11 @@ function initGlobalRealtimeIfNeeded() {
         })
         .on('broadcast', { event: 'new_order' }, () => {
           notifyRealtimeListeners();
+        })
+        .on('broadcast', { event: 'feedback_submitted' }, (payload: any) => {
+          if (payload.payload) {
+            window.dispatchEvent(new CustomEvent('rbh_feedback_updated', { detail: payload.payload }));
+          }
         })
         .subscribe();
     } catch (err) {
@@ -1665,6 +3057,16 @@ export async function recordDiningSessionPayment(params: RecordPaymentParams): P
     }
   }
 
+  // PHASE 2 AUTOMATIC STOCK CONSUMPTION HOOK (IDEMPOTENT)
+  if (isFullyPaid) {
+    try {
+      const ordersToConsume = updatedOrders.filter(o => affectedOrderIds.includes(o.id));
+      await consumeInventoryForOrders(ordersToConsume, currentRestaurantId);
+    } catch (invErr) {
+      console.warn('Inventory auto-consumption error during payment settlement:', invErr);
+    }
+  }
+
   window.dispatchEvent(new CustomEvent('rbh_order_status_updated', {
     detail: {
       sessionId: targetSessionId,
@@ -2101,16 +3503,8 @@ export function saveCustomerFeedback(feedback: CustomerFeedback): void {
       // Silently continue
     });
 
-    try {
-      const channel = supabase.channel('royal_orders_realtime');
-      channel.send({
-        type: 'broadcast',
-        event: 'feedback_submitted',
-        payload: feedback
-      });
-    } catch (e) {
-      // Ignore
-    }
+    const channelName = getOrdersRealtimeChannelName();
+    sendSupabaseBroadcast(channelName, 'feedback_submitted', feedback);
   }
 }
 
@@ -2145,89 +3539,66 @@ export async function updateMenuItemStock(
 }
 
 // ==========================================
-// RAW MATERIAL INVENTORY & STOCK MOVEMENTS
+// RAW MATERIAL INVENTORY & STOCK MOVEMENTS (PHASE 2)
 // ==========================================
 
-export function getStoredRawMaterials(): RawMaterial[] {
+export function getStoredRawMaterials(restaurantId: string = getCurrentRestaurantId()): RawMaterial[] {
   try {
-    const saved = localStorage.getItem(RAW_MATERIALS_STORAGE_KEY);
+    const tenantKey = getTenantStorageKey(RAW_MATERIALS_STORAGE_KEY, restaurantId);
+    const saved = localStorage.getItem(tenantKey) || (restaurantId === DEFAULT_RESTAURANT_ID ? localStorage.getItem(RAW_MATERIALS_STORAGE_KEY) : null);
     if (saved) {
       const parsed = JSON.parse(saved);
       if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed;
+        return parsed.map(item => ({
+          ...item,
+          restaurant_id: item.restaurant_id || restaurantId,
+          sku: item.sku || `ING-${item.name.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 4)}`,
+          status: item.quantity <= 0 ? 'OUT OF STOCK' : (item.quantity <= (item.minimumThreshold || 5) ? 'LOW STOCK' : 'IN STOCK')
+        }));
       }
     }
   } catch (e) {
     console.error('Failed to read raw materials from storage', e);
   }
-  // Initialize with defaults if empty
-  try {
-    localStorage.setItem(RAW_MATERIALS_STORAGE_KEY, JSON.stringify(DEFAULT_RAW_MATERIALS));
-  } catch (e) {
-    // Ignore
+  
+  // Initialize with defaults if empty for default restaurant
+  if (restaurantId === DEFAULT_RESTAURANT_ID) {
+    try {
+      const initialized = DEFAULT_RAW_MATERIALS.map(m => ({ ...m, restaurant_id: DEFAULT_RESTAURANT_ID }));
+      saveStoredRawMaterials(initialized, DEFAULT_RESTAURANT_ID);
+      return initialized;
+    } catch (e) {
+      // Ignore
+    }
+    return DEFAULT_RAW_MATERIALS;
   }
-  return DEFAULT_RAW_MATERIALS;
+  return [];
 }
 
-export async function fetchStockMovements(): Promise<{ movements: StockMovement[]; source: 'supabase' | 'local' }> {
+export function saveStoredRawMaterials(items: RawMaterial[], restaurantId: string = getCurrentRestaurantId()): void {
+  try {
+    const tenantKey = getTenantStorageKey(RAW_MATERIALS_STORAGE_KEY, restaurantId);
+    localStorage.setItem(tenantKey, JSON.stringify(items));
+    if (restaurantId === DEFAULT_RESTAURANT_ID) {
+      localStorage.setItem(RAW_MATERIALS_STORAGE_KEY, JSON.stringify(items));
+    }
+  } catch (e) {
+    console.error('Failed to save raw materials to storage', e);
+  }
+}
+
+export async function fetchRawMaterials(
+  restaurantId: string = getCurrentRestaurantId()
+): Promise<{ items: RawMaterial[]; source: 'supabase' | 'local' }> {
   const supabase = getSupabaseClient();
   if (supabase) {
     try {
       const { data, error } = await supabase
-        .from('stock_movements')
+        .from('raw_materials')
         .select('*')
-        .order('created_at', { ascending: false });
-      if (!error && data && data.length > 0) {
-        const mapped: StockMovement[] = data.map((row: any) => ({
-          id: String(row.id),
-          restaurant_id: row.restaurant_id,
-          rawMaterialId: row.raw_material_id || row.rawMaterialId,
-          rawMaterialName: row.raw_material_name || row.rawMaterialName,
-          movementType: row.movement_type || row.movementType || 'add',
-          quantityChange: Number(row.quantity_change ?? row.quantityChange ?? 0),
-          previousQuantity: Number(row.previous_quantity ?? row.previousQuantity ?? 0),
-          newQuantity: Number(row.new_quantity ?? row.newQuantity ?? 0),
-          unit: row.unit || 'kg',
-          reason: row.reason || 'Other',
-          notes: row.notes || '',
-          updatedBy: row.updated_by || row.updatedBy || 'Kitchen Chef',
-          createdAt: row.created_at || row.createdAt || new Date().toISOString()
-        }));
-        localStorage.setItem(STOCK_MOVEMENTS_STORAGE_KEY, JSON.stringify(mapped));
-        return { movements: mapped, source: 'supabase' };
-      }
-    } catch (e) {
-      console.warn('Failed to fetch stock movements from Supabase, using local:', e);
-    }
-  }
-  return { movements: getStoredStockMovements(), source: 'local' };
-}
+        .eq('restaurant_id', restaurantId)
+        .order('name', { ascending: true });
 
-export function getStoredStockMovements(): StockMovement[] {
-  try {
-    const saved = localStorage.getItem(STOCK_MOVEMENTS_STORAGE_KEY);
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      if (Array.isArray(parsed) && parsed.length > 0) {
-        return parsed;
-      }
-    }
-  } catch (e) {
-    console.error('Failed to read stock movements from storage', e);
-  }
-  try {
-    localStorage.setItem(STOCK_MOVEMENTS_STORAGE_KEY, JSON.stringify(DEFAULT_STOCK_MOVEMENTS));
-  } catch (e) {
-    // Ignore
-  }
-  return DEFAULT_STOCK_MOVEMENTS;
-}
-
-export async function fetchRawMaterials(): Promise<{ items: RawMaterial[]; source: 'supabase' | 'local' }> {
-  const supabase = getSupabaseClient();
-  if (supabase) {
-    try {
-      const { data, error } = await supabase.from('raw_materials').select('*');
       if (!error && data && data.length > 0) {
         const mapped: RawMaterial[] = data.map((row: any) => {
           const qty = Number(row.quantity ?? row.Quantity ?? 0);
@@ -2235,35 +3606,265 @@ export async function fetchRawMaterials(): Promise<{ items: RawMaterial[]; sourc
           const status: RawMaterialStockStatus = qty <= 0 ? 'OUT OF STOCK' : (qty <= min ? 'LOW STOCK' : 'IN STOCK');
           return {
             id: String(row.id),
+            restaurant_id: row.restaurant_id || restaurantId,
+            sku: row.sku || row.code,
             name: row.name ?? row.Name ?? 'Ingredient',
-            category: row.category ?? row.Category ?? 'Others',
+            category: row.category ?? row.Category ?? 'General Staples',
             quantity: isNaN(qty) ? 0 : qty,
             unit: (row.unit ?? row.Unit ?? 'kg') as any,
             minimumThreshold: isNaN(min) ? 5 : min,
+            reorderLevel: row.reorder_level ? Number(row.reorder_level) : min * 1.5,
+            maxStock: row.max_stock ? Number(row.max_stock) : undefined,
+            purchasePrice: row.purchase_price ? Number(row.purchase_price) : undefined,
+            supplier: row.supplier,
             status: (row.status ?? status) as RawMaterialStockStatus,
+            isActive: row.is_active !== undefined ? row.is_active : true,
+            notes: row.notes,
             updatedAt: row.updated_at ?? row.updatedAt ?? new Date().toISOString(),
-            lastUpdatedBy: row.last_updated_by ?? row.lastUpdatedBy ?? 'Kitchen Chef'
+            lastUpdatedBy: row.last_updated_by ?? row.lastUpdatedBy ?? 'Kitchen Chef',
+            is_archived: Boolean(row.is_archived)
           };
         });
-        localStorage.setItem(RAW_MATERIALS_STORAGE_KEY, JSON.stringify(mapped));
+        saveStoredRawMaterials(mapped, restaurantId);
         return { items: mapped, source: 'supabase' };
       }
     } catch (e) {
       console.warn('Failed to fetch raw materials from Supabase, using local:', e);
     }
   }
-  return { items: getStoredRawMaterials(), source: 'local' };
+  return { items: getStoredRawMaterials(restaurantId), source: 'local' };
+}
+
+export function saveRawMaterial(
+  material: Omit<RawMaterial, 'id' | 'updatedAt'> & { id?: string; updatedAt?: string },
+  restaurantId: string = getCurrentRestaurantId()
+): RawMaterial {
+  const current = getStoredRawMaterials(restaurantId);
+  const isExisting = Boolean(material.id && current.some(m => m.id === material.id));
+  const id = material.id || `raw-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+  const qty = Math.max(0, Math.round(Number(material.quantity || 0) * 1000) / 1000);
+  const min = Math.max(0.01, Math.round(Number(material.minimumThreshold || 5) * 100) / 100);
+  const status: RawMaterialStockStatus = qty <= 0 ? 'OUT OF STOCK' : (qty <= min ? 'LOW STOCK' : 'IN STOCK');
+  const nowIso = new Date().toISOString();
+
+  const savedItem: RawMaterial = {
+    id,
+    restaurant_id: restaurantId,
+    sku: material.sku || `ING-${material.name.replace(/[^a-zA-Z0-9]/g, '').toUpperCase().slice(0, 4)}`,
+    name: material.name.trim(),
+    category: material.category || 'General Staples',
+    quantity: qty,
+    unit: material.unit || 'kg',
+    minimumThreshold: min,
+    reorderLevel: material.reorderLevel !== undefined ? Number(material.reorderLevel) : min * 1.5,
+    maxStock: material.maxStock !== undefined ? Number(material.maxStock) : undefined,
+    purchasePrice: material.purchasePrice !== undefined ? Number(material.purchasePrice) : undefined,
+    supplier: material.supplier,
+    status,
+    isActive: material.isActive !== undefined ? material.isActive : true,
+    notes: material.notes,
+    updatedAt: nowIso,
+    lastUpdatedBy: material.lastUpdatedBy || 'Kitchen Chef',
+    is_archived: false
+  };
+
+  let updatedList: RawMaterial[];
+  if (isExisting) {
+    updatedList = current.map(m => m.id === id ? savedItem : m);
+  } else {
+    updatedList = [savedItem, ...current];
+  }
+
+  saveStoredRawMaterials(updatedList, restaurantId);
+
+  // If new item, log opening stock movement
+  if (!isExisting && qty > 0) {
+    const openingMovement: StockMovement = {
+      id: `sm-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      restaurant_id: restaurantId,
+      rawMaterialId: savedItem.id,
+      rawMaterialName: savedItem.name,
+      movementType: 'OPENING_STOCK',
+      quantityChange: qty,
+      previousQuantity: 0,
+      newQuantity: qty,
+      unit: savedItem.unit,
+      costPerUnit: savedItem.purchasePrice,
+      totalCost: savedItem.purchasePrice ? savedItem.purchasePrice * qty : undefined,
+      referenceType: 'MANUAL',
+      reason: 'Opening Stock',
+      notes: 'Initial ingredient creation & opening stock',
+      updatedBy: savedItem.lastUpdatedBy || 'Store Manager',
+      createdAt: nowIso
+    };
+    const movements = getStoredStockMovements(restaurantId);
+    saveStoredStockMovements([openingMovement, ...movements], restaurantId);
+  }
+
+  window.dispatchEvent(new CustomEvent('rbh_raw_materials_updated', { detail: { rawMaterial: savedItem, restaurantId } }));
+  if (ordersBroadcastChannel) {
+    try {
+      ordersBroadcastChannel.postMessage({ type: 'RAW_MATERIALS_UPDATED', rawMaterial: savedItem, restaurantId });
+    } catch (e) {}
+  }
+
+  const supabase = getSupabaseClient();
+  if (supabase) {
+    const dbPayload = {
+      id: savedItem.id,
+      restaurant_id: restaurantId,
+      sku: savedItem.sku,
+      name: savedItem.name,
+      category: savedItem.category,
+      quantity: savedItem.quantity,
+      unit: savedItem.unit,
+      minimum_threshold: savedItem.minimumThreshold,
+      reorder_level: savedItem.reorderLevel,
+      max_stock: savedItem.maxStock,
+      purchase_price: savedItem.purchasePrice,
+      supplier: savedItem.supplier,
+      status: savedItem.status,
+      is_active: savedItem.isActive,
+      notes: savedItem.notes,
+      updated_at: savedItem.updatedAt,
+      last_updated_by: savedItem.lastUpdatedBy,
+      is_archived: savedItem.is_archived
+    };
+    Promise.resolve(
+      supabase.from('raw_materials').upsert(dbPayload, { onConflict: 'id' })
+    ).catch(() => {});
+  }
+
+  return savedItem;
+}
+
+export function deleteRawMaterial(id: string, restaurantId: string = getCurrentRestaurantId()): boolean {
+  const current = getStoredRawMaterials(restaurantId);
+  const target = current.find(m => m.id === id);
+  if (!target) return false;
+
+  const updated = current.filter(m => m.id !== id);
+  saveStoredRawMaterials(updated, restaurantId);
+
+  window.dispatchEvent(new CustomEvent('rbh_raw_materials_updated', { detail: { deletedId: id, restaurantId } }));
+  if (ordersBroadcastChannel) {
+    try {
+      ordersBroadcastChannel.postMessage({ type: 'RAW_MATERIALS_UPDATED', deletedId: id, restaurantId });
+    } catch (e) {}
+  }
+
+  const supabase = getSupabaseClient();
+  if (supabase) {
+    Promise.resolve(
+      supabase.from('raw_materials').delete().eq('id', id).eq('restaurant_id', restaurantId)
+    ).catch(() => {});
+  }
+
+  return true;
+}
+
+// ----------------------------------------------------
+// STOCK MOVEMENTS & AUDIT LEDGER
+// ----------------------------------------------------
+
+export function getStoredStockMovements(restaurantId: string = getCurrentRestaurantId()): StockMovement[] {
+  try {
+    const tenantKey = getTenantStorageKey(STOCK_MOVEMENTS_STORAGE_KEY, restaurantId);
+    const saved = localStorage.getItem(tenantKey) || (restaurantId === DEFAULT_RESTAURANT_ID ? localStorage.getItem(STOCK_MOVEMENTS_STORAGE_KEY) : null);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed.map(m => ({
+          ...m,
+          restaurant_id: m.restaurant_id || restaurantId
+        }));
+      }
+    }
+  } catch (e) {
+    console.error('Failed to read stock movements from storage', e);
+  }
+
+  if (restaurantId === DEFAULT_RESTAURANT_ID) {
+    try {
+      const initialized = DEFAULT_STOCK_MOVEMENTS.map(m => ({ ...m, restaurant_id: DEFAULT_RESTAURANT_ID }));
+      saveStoredStockMovements(initialized, DEFAULT_RESTAURANT_ID);
+      return initialized;
+    } catch (e) {}
+    return DEFAULT_STOCK_MOVEMENTS;
+  }
+  return [];
+}
+
+export function saveStoredStockMovements(movements: StockMovement[], restaurantId: string = getCurrentRestaurantId()): void {
+  try {
+    const tenantKey = getTenantStorageKey(STOCK_MOVEMENTS_STORAGE_KEY, restaurantId);
+    // Keep last 300 movements locally for performance
+    const trimmed = movements.slice(0, 300);
+    localStorage.setItem(tenantKey, JSON.stringify(trimmed));
+    if (restaurantId === DEFAULT_RESTAURANT_ID) {
+      localStorage.setItem(STOCK_MOVEMENTS_STORAGE_KEY, JSON.stringify(trimmed));
+    }
+  } catch (e) {
+    console.error('Failed to save stock movements to storage', e);
+  }
+}
+
+export async function fetchStockMovements(
+  restaurantId: string = getCurrentRestaurantId()
+): Promise<{ movements: StockMovement[]; source: 'supabase' | 'local' }> {
+  const supabase = getSupabaseClient();
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('stock_movements')
+        .select('*')
+        .eq('restaurant_id', restaurantId)
+        .order('created_at', { ascending: false });
+
+      if (!error && data && data.length > 0) {
+        const mapped: StockMovement[] = data.map((row: any) => ({
+          id: String(row.id),
+          restaurant_id: row.restaurant_id || restaurantId,
+          rawMaterialId: row.raw_material_id || row.rawMaterialId,
+          rawMaterialName: row.raw_material_name || row.rawMaterialName,
+          movementType: row.movement_type || row.movementType || 'add',
+          quantityChange: Number(row.quantity_change ?? row.quantityChange ?? 0),
+          previousQuantity: Number(row.previous_quantity ?? row.previousQuantity ?? 0),
+          newQuantity: Number(row.new_quantity ?? row.newQuantity ?? 0),
+          unit: row.unit || 'kg',
+          costPerUnit: row.cost_per_unit ? Number(row.cost_per_unit) : undefined,
+          totalCost: row.total_cost ? Number(row.total_cost) : undefined,
+          referenceType: row.reference_type || row.referenceType,
+          referenceId: row.reference_id || row.referenceId,
+          reason: row.reason || 'Other',
+          notes: row.notes || '',
+          updatedBy: row.updated_by || row.updatedBy || 'Kitchen Chef',
+          createdAt: row.created_at || row.createdAt || new Date().toISOString()
+        }));
+        saveStoredStockMovements(mapped, restaurantId);
+        return { movements: mapped, source: 'supabase' };
+      }
+    } catch (e) {
+      console.warn('Failed to fetch stock movements from Supabase, using local:', e);
+    }
+  }
+  return { movements: getStoredStockMovements(restaurantId), source: 'local' };
 }
 
 export async function updateRawMaterialStock(params: {
   rawMaterialId: string;
   action: StockMovementType;
   quantity: number;
-  reason: StockMovementReason;
+  reason: StockMovementReason | string;
   updatedBy: string;
   notes?: string;
+  referenceType?: 'PURCHASE' | 'ORDER' | 'WASTAGE' | 'PHYSICAL_AUDIT' | 'MANUAL';
+  referenceId?: string;
+  unitPrice?: number;
+  restaurantId?: string;
 }): Promise<RawMaterial | null> {
-  const items = getStoredRawMaterials();
+  const restaurantId = params.restaurantId || getCurrentRestaurantId();
+  const items = getStoredRawMaterials(restaurantId);
   const index = items.findIndex(i => i.id === params.rawMaterialId);
   if (index === -1) return null;
 
@@ -2272,36 +3873,41 @@ export async function updateRawMaterialStock(params: {
   let newQty = prevQty;
   let change = 0;
 
-  if (params.action === 'add') {
+  if (params.action === 'add' || params.action === 'PURCHASE' || params.action === 'OPENING_STOCK' || params.action === 'RETURN') {
     change = Math.abs(params.quantity);
     newQty = prevQty + change;
-  } else if (params.action === 'reduce') {
+  } else if (params.action === 'reduce' || params.action === 'SALE_CONSUMPTION' || params.action === 'WASTAGE') {
     change = -Math.abs(params.quantity);
     newQty = Math.max(0, prevQty - Math.abs(params.quantity));
   } else {
-    // set exact
+    // Exact set / ADJUSTMENT
     newQty = Math.max(0, params.quantity);
     change = newQty - prevQty;
   }
 
-  newQty = Math.round(newQty * 100) / 100;
+  newQty = Math.round(newQty * 1000) / 1000;
   const status: RawMaterialStockStatus = newQty <= 0 ? 'OUT OF STOCK' : (newQty <= current.minimumThreshold ? 'LOW STOCK' : 'IN STOCK');
+  const nowIso = new Date().toISOString();
 
   const updatedItem: RawMaterial = {
     ...current,
     quantity: newQty,
     status,
-    updatedAt: new Date().toISOString(),
+    purchasePrice: params.unitPrice !== undefined ? params.unitPrice : current.purchasePrice,
+    updatedAt: nowIso,
     lastUpdatedBy: params.updatedBy || 'Kitchen Chef'
   };
 
   items[index] = updatedItem;
-  localStorage.setItem(RAW_MATERIALS_STORAGE_KEY, JSON.stringify(items));
+  saveStoredRawMaterials(items, restaurantId);
 
   // Log movement
-  const movements = getStoredStockMovements();
+  const costPerUnit = params.unitPrice !== undefined ? params.unitPrice : current.purchasePrice;
+  const totalCost = costPerUnit !== undefined ? Math.abs(change) * costPerUnit : undefined;
+
   const newMovement: StockMovement = {
     id: `sm-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+    restaurant_id: restaurantId,
     rawMaterialId: current.id,
     rawMaterialName: current.name,
     movementType: params.action,
@@ -2309,18 +3915,21 @@ export async function updateRawMaterialStock(params: {
     previousQuantity: prevQty,
     newQuantity: newQty,
     unit: current.unit,
+    costPerUnit,
+    totalCost,
+    referenceType: params.referenceType || (params.action === 'PURCHASE' ? 'PURCHASE' : params.action === 'WASTAGE' ? 'WASTAGE' : params.action === 'ADJUSTMENT' ? 'PHYSICAL_AUDIT' : 'MANUAL'),
+    referenceId: params.referenceId,
     reason: params.reason,
     notes: params.notes || '',
     updatedBy: params.updatedBy || 'Kitchen Chef',
-    createdAt: new Date().toISOString()
+    createdAt: nowIso
   };
 
-  movements.unshift(newMovement);
-  // Keep last 100 movements
-  localStorage.setItem(STOCK_MOVEMENTS_STORAGE_KEY, JSON.stringify(movements.slice(0, 100)));
+  const movements = getStoredStockMovements(restaurantId);
+  saveStoredStockMovements([newMovement, ...movements], restaurantId);
 
   // Dispatch window events
-  window.dispatchEvent(new CustomEvent('rbh_raw_materials_updated', { detail: { rawMaterial: updatedItem, movement: newMovement } }));
+  window.dispatchEvent(new CustomEvent('rbh_raw_materials_updated', { detail: { rawMaterial: updatedItem, movement: newMovement, restaurantId } }));
 
   // Broadcast across tabs
   if (ordersBroadcastChannel) {
@@ -2328,11 +3937,10 @@ export async function updateRawMaterialStock(params: {
       ordersBroadcastChannel.postMessage({
         type: 'RAW_MATERIALS_UPDATED',
         rawMaterial: updatedItem,
-        movement: newMovement
+        movement: newMovement,
+        restaurantId
       });
-    } catch (e) {
-      // Ignore
-    }
+    } catch (e) {}
   }
 
   // Push to Supabase if connected
@@ -2344,10 +3952,12 @@ export async function updateRawMaterialStock(params: {
         .update({
           quantity: newQty,
           status,
+          purchase_price: updatedItem.purchasePrice,
           updated_at: updatedItem.updatedAt,
           last_updated_by: updatedItem.lastUpdatedBy
         })
         .eq('id', current.id)
+        .eq('restaurant_id', restaurantId)
     ).catch(() => {});
 
     Promise.resolve(
@@ -2355,6 +3965,7 @@ export async function updateRawMaterialStock(params: {
         .from('stock_movements')
         .insert([{
           id: newMovement.id,
+          restaurant_id: restaurantId,
           raw_material_id: newMovement.rawMaterialId,
           raw_material_name: newMovement.rawMaterialName,
           movement_type: newMovement.movementType,
@@ -2362,23 +3973,16 @@ export async function updateRawMaterialStock(params: {
           previous_quantity: newMovement.previousQuantity,
           new_quantity: newMovement.newQuantity,
           unit: newMovement.unit,
+          cost_per_unit: newMovement.costPerUnit,
+          total_cost: newMovement.totalCost,
+          reference_type: newMovement.referenceType,
+          reference_id: newMovement.referenceId,
           reason: newMovement.reason,
           notes: newMovement.notes,
           updated_by: newMovement.updatedBy,
           created_at: newMovement.createdAt
         }])
     ).catch(() => {});
-
-    try {
-      const channel = supabase.channel('royal_orders_realtime');
-      channel.send({
-        type: 'broadcast',
-        event: 'raw_materials_updated',
-        payload: { rawMaterial: updatedItem, movement: newMovement }
-      });
-    } catch (e) {
-      // Ignore
-    }
   }
 
   return updatedItem;
@@ -2390,95 +3994,839 @@ export async function addNewRawMaterial(params: {
   unit: RawMaterial['unit'];
   minimumThreshold: number;
   category?: string;
+  sku?: string;
+  reorderLevel?: number;
+  purchasePrice?: number;
+  supplier?: string;
   updatedBy?: string;
   initialNotes?: string;
+  restaurantId?: string;
 }): Promise<RawMaterial> {
-  const items = getStoredRawMaterials();
-  const qty = Math.max(0, Math.round(Number(params.quantity) * 100) / 100);
-  const min = Math.max(0.1, Math.round(Number(params.minimumThreshold) * 100) / 100);
-  const status: RawMaterialStockStatus = qty <= 0 ? 'OUT OF STOCK' : (qty <= min ? 'LOW STOCK' : 'IN STOCK');
-
-  const newItem: RawMaterial = {
-    id: `raw-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-    name: params.name.trim(),
-    category: params.category || 'General Kitchen Staples',
-    quantity: qty,
+  const restaurantId = params.restaurantId || getCurrentRestaurantId();
+  return saveRawMaterial({
+    name: params.name,
+    category: params.category || 'General Staples',
+    sku: params.sku,
+    quantity: params.quantity,
     unit: params.unit,
-    minimumThreshold: min,
-    status,
-    updatedAt: new Date().toISOString(),
-    lastUpdatedBy: params.updatedBy || 'Kitchen Chef'
+    minimumThreshold: params.minimumThreshold,
+    reorderLevel: params.reorderLevel,
+    purchasePrice: params.purchasePrice,
+    supplier: params.supplier,
+    status: params.quantity <= 0 ? 'OUT OF STOCK' : (params.quantity <= params.minimumThreshold ? 'LOW STOCK' : 'IN STOCK'),
+    lastUpdatedBy: params.updatedBy || 'Kitchen Chef',
+    notes: params.initialNotes
+  }, restaurantId);
+}
+
+// ----------------------------------------------------
+// UNIT CONVERSION ENGINE
+// ----------------------------------------------------
+
+export function convertUnits(quantity: number, fromUnit: string, toUnit: string): number {
+  if (quantity === 0) return 0;
+  const from = (fromUnit || '').toLowerCase().trim();
+  const to = (toUnit || '').toLowerCase().trim();
+  if (from === to) return quantity;
+
+  // Weight conversions (base: grams)
+  const weightFactors: Record<string, number> = {
+    'mg': 0.001,
+    'g': 1,
+    'kg': 1000,
+    'ounce': 28.3495,
+    'lb': 453.592
   };
 
-  items.unshift(newItem);
-  localStorage.setItem(RAW_MATERIALS_STORAGE_KEY, JSON.stringify(items));
+  if (weightFactors[from] && weightFactors[to]) {
+    const inGrams = quantity * weightFactors[from];
+    return inGrams / weightFactors[to];
+  }
 
-  // Log initial movement
-  const movements = getStoredStockMovements();
-  const initialMovement: StockMovement = {
-    id: `sm-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-    rawMaterialId: newItem.id,
-    rawMaterialName: newItem.name,
-    movementType: 'add',
-    quantityChange: qty,
-    previousQuantity: 0,
-    newQuantity: qty,
-    unit: newItem.unit,
-    reason: 'New delivery',
-    notes: params.initialNotes || 'Initial ingredient stock intake',
-    updatedBy: params.updatedBy || 'Kitchen Chef',
-    createdAt: new Date().toISOString()
+  // Volume conversions (base: ml)
+  const volumeFactors: Record<string, number> = {
+    'ml': 1,
+    'cl': 10,
+    'litre': 1000,
+    'liter': 1000,
+    'cup': 240,
+    'tbsp': 15,
+    'tsp': 5
   };
-  movements.unshift(initialMovement);
-  localStorage.setItem(STOCK_MOVEMENTS_STORAGE_KEY, JSON.stringify(movements.slice(0, 100)));
 
-  window.dispatchEvent(new CustomEvent('rbh_raw_materials_updated', { detail: { rawMaterial: newItem, movement: initialMovement } }));
+  if (volumeFactors[from] && volumeFactors[to]) {
+    const inMl = quantity * volumeFactors[from];
+    return inMl / volumeFactors[to];
+  }
 
+  // Count/packaging conversions
+  if ((from === 'pcs' || from === 'pc') && (to === 'pack' || to === 'can' || to === 'bottle' || to === 'box')) {
+    return quantity;
+  }
+  if ((from === 'pack' || from === 'can' || from === 'bottle' || from === 'box') && (to === 'pcs' || to === 'pc')) {
+    return quantity;
+  }
+
+  // Default fallback: return as-is
+  return quantity;
+}
+
+// ----------------------------------------------------
+// RECIPE MANAGEMENT ENGINE (PHASE 2)
+// ----------------------------------------------------
+
+export function getStoredRecipes(restaurantId: string = getCurrentRestaurantId()): MenuItemRecipe[] {
+  try {
+    const tenantKey = getTenantStorageKey(MENU_RECIPES_STORAGE_KEY, restaurantId);
+    const saved = localStorage.getItem(tenantKey) || (restaurantId === DEFAULT_RESTAURANT_ID ? localStorage.getItem(MENU_RECIPES_STORAGE_KEY) : null);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed.map(r => ({
+          ...r,
+          restaurant_id: r.restaurant_id || restaurantId
+        }));
+      }
+    }
+  } catch (e) {
+    console.error('Failed to read recipes from storage', e);
+  }
+
+  if (restaurantId === DEFAULT_RESTAURANT_ID) {
+    try {
+      const initialized = DEFAULT_MENU_RECIPES.map(r => ({ ...r, restaurant_id: DEFAULT_RESTAURANT_ID }));
+      saveStoredRecipes(initialized, DEFAULT_RESTAURANT_ID);
+      return initialized;
+    } catch (e) {}
+    return DEFAULT_MENU_RECIPES;
+  }
+  return [];
+}
+
+export function saveStoredRecipes(recipes: MenuItemRecipe[], restaurantId: string = getCurrentRestaurantId()): void {
+  try {
+    const tenantKey = getTenantStorageKey(MENU_RECIPES_STORAGE_KEY, restaurantId);
+    localStorage.setItem(tenantKey, JSON.stringify(recipes));
+    if (restaurantId === DEFAULT_RESTAURANT_ID) {
+      localStorage.setItem(MENU_RECIPES_STORAGE_KEY, JSON.stringify(recipes));
+    }
+  } catch (e) {
+    console.error('Failed to save recipes to storage', e);
+  }
+}
+
+export async function fetchStoredRecipes(
+  restaurantId: string = getCurrentRestaurantId()
+): Promise<{ recipes: MenuItemRecipe[]; source: 'supabase' | 'local' }> {
+  const supabase = getSupabaseClient();
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('menu_item_recipes')
+        .select(`
+          *,
+          ingredients:menu_item_recipe_ingredients(*)
+        `)
+        .eq('restaurant_id', restaurantId);
+
+      if (!error && data && data.length > 0) {
+        const mapped: MenuItemRecipe[] = data.map((row: any) => {
+          const rawIngredients = row.ingredients || [];
+          const ingredients: RecipeIngredient[] = rawIngredients.map((ing: any) => ({
+            id: String(ing.id),
+            rawMaterialId: ing.raw_material_id || ing.rawMaterialId,
+            rawMaterialName: ing.raw_material_name || ing.rawMaterialName,
+            quantity: Number(ing.quantity ?? 0),
+            unit: (ing.unit || 'g') as any,
+            isOptional: Boolean(ing.is_optional),
+            notes: ing.notes,
+            estimatedCost: ing.estimated_cost ? Number(ing.estimated_cost) : undefined
+          }));
+
+          return {
+            id: String(row.id),
+            restaurant_id: row.restaurant_id || restaurantId,
+            menuItemId: String(row.menu_item_id || row.menuItemId),
+            menuItemName: row.menu_item_name || row.menuItemName,
+            variantId: row.variant_id || row.variantId,
+            variantName: row.variant_name || row.variantName,
+            yieldQuantity: Number(row.yield_quantity ?? 1),
+            portionSize: row.portion_size || row.portionSize,
+            prepInstructions: row.prep_instructions || row.prepInstructions,
+            ingredients,
+            calculatedCost: row.calculated_cost ? Number(row.calculated_cost) : undefined,
+            sellingPrice: row.selling_price ? Number(row.selling_price) : undefined,
+            foodCostPercentage: row.food_cost_percentage ? Number(row.food_cost_percentage) : undefined,
+            updatedAt: row.updated_at || new Date().toISOString(),
+            updatedBy: row.updated_by || 'Chef'
+          };
+        });
+        saveStoredRecipes(mapped, restaurantId);
+        return { recipes: mapped, source: 'supabase' };
+      }
+    } catch (e) {
+      console.warn('Failed to fetch recipes from Supabase, using local:', e);
+    }
+  }
+  return { recipes: getStoredRecipes(restaurantId), source: 'local' };
+}
+
+export function calculateRecipeFoodCost(
+  ingredients: RecipeIngredient[], 
+  rawMaterials: RawMaterial[], 
+  sellingPrice?: number
+): { calculatedCost: number; foodCostPercentage?: number; ingredientCosts: RecipeIngredient[] } {
+  let totalCost = 0;
+  const enrichedIngredients = ingredients.map(ing => {
+    const mat = rawMaterials.find(m => m.id === ing.rawMaterialId);
+    let cost = 0;
+    if (mat && mat.purchasePrice && mat.purchasePrice > 0) {
+      const convertedQty = convertUnits(ing.quantity, ing.unit, mat.unit);
+      cost = Math.round(convertedQty * mat.purchasePrice * 100) / 100;
+    } else if (ing.estimatedCost) {
+      cost = ing.estimatedCost;
+    }
+    totalCost += cost;
+    return {
+      ...ing,
+      estimatedCost: cost
+    };
+  });
+
+  const finalCost = Math.round(totalCost * 100) / 100;
+  let foodCostPercentage: number | undefined = undefined;
+  if (sellingPrice && sellingPrice > 0) {
+    foodCostPercentage = Math.round((finalCost / sellingPrice) * 1000) / 10;
+  }
+
+  return {
+    calculatedCost: finalCost,
+    foodCostPercentage,
+    ingredientCosts: enrichedIngredients
+  };
+}
+
+export function saveMenuItemRecipe(
+  recipe: Omit<MenuItemRecipe, 'id' | 'updatedAt'> & { id?: string; updatedAt?: string },
+  restaurantId: string = getCurrentRestaurantId()
+): MenuItemRecipe {
+  const current = getStoredRecipes(restaurantId);
+  const rawMaterials = getStoredRawMaterials(restaurantId);
+  const isExisting = Boolean(recipe.id && current.some(r => r.id === recipe.id));
+  const id = recipe.id || `rec-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+  const nowIso = new Date().toISOString();
+
+  // Recalculate food cost
+  const costCalc = calculateRecipeFoodCost(recipe.ingredients, rawMaterials, recipe.sellingPrice);
+
+  const savedRecipe: MenuItemRecipe = {
+    ...recipe,
+    id,
+    restaurant_id: restaurantId,
+    ingredients: costCalc.ingredientCosts,
+    calculatedCost: costCalc.calculatedCost,
+    foodCostPercentage: costCalc.foodCostPercentage,
+    updatedAt: nowIso,
+    updatedBy: recipe.updatedBy || 'Executive Chef'
+  };
+
+  let updatedList: MenuItemRecipe[];
+  if (isExisting) {
+    updatedList = current.map(r => r.id === id ? savedRecipe : r);
+  } else {
+    // If recipe already exists for this menuItemId and variant, replace it
+    const existingIndex = current.findIndex(r => r.menuItemId === savedRecipe.menuItemId && (r.variantId || '') === (savedRecipe.variantId || ''));
+    if (existingIndex >= 0) {
+      updatedList = current.map((r, idx) => idx === existingIndex ? savedRecipe : r);
+    } else {
+      updatedList = [savedRecipe, ...current];
+    }
+  }
+
+  saveStoredRecipes(updatedList, restaurantId);
+
+  window.dispatchEvent(new CustomEvent('rbh_recipes_updated', { detail: { recipe: savedRecipe, restaurantId } }));
   if (ordersBroadcastChannel) {
     try {
-      ordersBroadcastChannel.postMessage({
-        type: 'RAW_MATERIALS_UPDATED',
-        rawMaterial: newItem,
-        movement: initialMovement
-      });
+      ordersBroadcastChannel.postMessage({ type: 'RECIPES_UPDATED', recipe: savedRecipe, restaurantId });
     } catch (e) {}
   }
 
-  // Supabase push
+  // Push to Supabase
   const supabase = getSupabaseClient();
   if (supabase) {
     Promise.resolve(
-      supabase.from('raw_materials').insert([{
-        id: newItem.id,
-        name: newItem.name,
-        category: newItem.category,
-        quantity: newItem.quantity,
-        unit: newItem.unit,
-        minimum_threshold: newItem.minimumThreshold,
-        status: newItem.status,
-        updated_at: newItem.updatedAt,
-        last_updated_by: newItem.lastUpdatedBy
+      supabase.from('menu_item_recipes').upsert({
+        id: savedRecipe.id,
+        restaurant_id: restaurantId,
+        menu_item_id: savedRecipe.menuItemId,
+        menu_item_name: savedRecipe.menuItemName,
+        variant_id: savedRecipe.variantId,
+        variant_name: savedRecipe.variantName,
+        yield_quantity: savedRecipe.yieldQuantity,
+        portion_size: savedRecipe.portionSize,
+        prep_instructions: savedRecipe.prepInstructions,
+        calculated_cost: savedRecipe.calculatedCost,
+        selling_price: savedRecipe.sellingPrice,
+        food_cost_percentage: savedRecipe.foodCostPercentage,
+        updated_at: savedRecipe.updatedAt,
+        updated_by: savedRecipe.updatedBy
+      }, { onConflict: 'id' })
+    ).then(() => {
+      // Re-insert ingredients
+      if (savedRecipe.ingredients && savedRecipe.ingredients.length > 0) {
+        const ingRows = savedRecipe.ingredients.map(ing => ({
+          id: ing.id || `ri-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          restaurant_id: restaurantId,
+          recipe_id: savedRecipe.id,
+          raw_material_id: ing.rawMaterialId,
+          raw_material_name: ing.rawMaterialName,
+          quantity: ing.quantity,
+          unit: ing.unit,
+          is_optional: Boolean(ing.isOptional),
+          notes: ing.notes,
+          estimated_cost: ing.estimatedCost
+        }));
+        return supabase.from('menu_item_recipe_ingredients').delete().eq('recipe_id', savedRecipe.id).then(() => {
+          return supabase.from('menu_item_recipe_ingredients').insert(ingRows);
+        });
+      }
+    }).catch(() => {});
+  }
+
+  return savedRecipe;
+}
+
+export function deleteMenuItemRecipe(recipeId: string, restaurantId: string = getCurrentRestaurantId()): boolean {
+  const current = getStoredRecipes(restaurantId);
+  const updated = current.filter(r => r.id !== recipeId);
+  saveStoredRecipes(updated, restaurantId);
+
+  window.dispatchEvent(new CustomEvent('rbh_recipes_updated', { detail: { deletedId: recipeId, restaurantId } }));
+  if (ordersBroadcastChannel) {
+    try {
+      ordersBroadcastChannel.postMessage({ type: 'RECIPES_UPDATED', deletedId: recipeId, restaurantId });
+    } catch (e) {}
+  }
+
+  const supabase = getSupabaseClient();
+  if (supabase) {
+    Promise.resolve(
+      supabase.from('menu_item_recipe_ingredients').delete().eq('recipe_id', recipeId).eq('restaurant_id', restaurantId)
+    ).then(() => {
+      return supabase.from('menu_item_recipes').delete().eq('id', recipeId).eq('restaurant_id', restaurantId);
+    }).catch(() => {});
+  }
+
+  return true;
+}
+
+// ----------------------------------------------------
+// INVENTORY PURCHASES & STOCK-IN (PHASE 2)
+// ----------------------------------------------------
+
+export function getStoredPurchases(restaurantId: string = getCurrentRestaurantId()): InventoryPurchaseRecord[] {
+  try {
+    const tenantKey = getTenantStorageKey(INVENTORY_PURCHASES_STORAGE_KEY, restaurantId);
+    const saved = localStorage.getItem(tenantKey) || (restaurantId === DEFAULT_RESTAURANT_ID ? localStorage.getItem(INVENTORY_PURCHASES_STORAGE_KEY) : null);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed.map(p => ({
+          ...p,
+          restaurant_id: p.restaurant_id || restaurantId
+        }));
+      }
+    }
+  } catch (e) {
+    console.error('Failed to read purchases from storage', e);
+  }
+
+  if (restaurantId === DEFAULT_RESTAURANT_ID) {
+    try {
+      const initialized = DEFAULT_PURCHASE_RECORDS.map(p => ({ ...p, restaurant_id: DEFAULT_RESTAURANT_ID }));
+      saveStoredPurchases(initialized, DEFAULT_RESTAURANT_ID);
+      return initialized;
+    } catch (e) {}
+    return DEFAULT_PURCHASE_RECORDS;
+  }
+  return [];
+}
+
+export function saveStoredPurchases(purchases: InventoryPurchaseRecord[], restaurantId: string = getCurrentRestaurantId()): void {
+  try {
+    const tenantKey = getTenantStorageKey(INVENTORY_PURCHASES_STORAGE_KEY, restaurantId);
+    localStorage.setItem(tenantKey, JSON.stringify(purchases.slice(0, 200)));
+    if (restaurantId === DEFAULT_RESTAURANT_ID) {
+      localStorage.setItem(INVENTORY_PURCHASES_STORAGE_KEY, JSON.stringify(purchases.slice(0, 200)));
+    }
+  } catch (e) {
+    console.error('Failed to save purchases to storage', e);
+  }
+}
+
+export async function fetchStoredPurchases(
+  restaurantId: string = getCurrentRestaurantId()
+): Promise<{ purchases: InventoryPurchaseRecord[]; source: 'supabase' | 'local' }> {
+  const supabase = getSupabaseClient();
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('inventory_purchases')
+        .select(`
+          *,
+          items:inventory_purchase_items(*)
+        `)
+        .eq('restaurant_id', restaurantId)
+        .order('created_at', { ascending: false });
+
+      if (!error && data && data.length > 0) {
+        const mapped: InventoryPurchaseRecord[] = data.map((row: any) => ({
+          id: String(row.id),
+          restaurant_id: row.restaurant_id || restaurantId,
+          invoiceNumber: row.invoice_number || row.invoiceNumber,
+          supplierName: row.supplier_name || row.supplierName,
+          purchaseDate: row.purchase_date || row.purchaseDate,
+          totalAmount: Number(row.total_amount ?? row.totalAmount ?? 0),
+          paymentStatus: row.payment_status || row.paymentStatus || 'Paid',
+          paymentMode: row.payment_mode || row.paymentMode || 'UPI',
+          notes: row.notes,
+          recordedBy: row.recorded_by || row.recordedBy || 'Store Manager',
+          createdAt: row.created_at || row.createdAt || new Date().toISOString(),
+          items: (row.items || []).map((item: any) => ({
+            id: String(item.id),
+            rawMaterialId: item.raw_material_id || item.rawMaterialId,
+            rawMaterialName: item.raw_material_name || item.rawMaterialName,
+            quantity: Number(item.quantity ?? 0),
+            unit: item.unit || 'kg',
+            unitPrice: Number(item.unit_price ?? item.unitPrice ?? 0),
+            totalPrice: Number(item.total_price ?? item.totalPrice ?? 0),
+            expiryDate: item.expiry_date || item.expiryDate
+          }))
+        }));
+        saveStoredPurchases(mapped, restaurantId);
+        return { purchases: mapped, source: 'supabase' };
+      }
+    } catch (e) {
+      console.warn('Failed to fetch purchases from Supabase, using local:', e);
+    }
+  }
+  return { purchases: getStoredPurchases(restaurantId), source: 'local' };
+}
+
+export async function recordInventoryPurchase(
+  purchase: Omit<InventoryPurchaseRecord, 'id' | 'createdAt'> & { id?: string; createdAt?: string },
+  restaurantId: string = getCurrentRestaurantId()
+): Promise<InventoryPurchaseRecord> {
+  const current = getStoredPurchases(restaurantId);
+  const id = purchase.id || `PUR-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  const nowIso = new Date().toISOString();
+
+  const savedRecord: InventoryPurchaseRecord = {
+    ...purchase,
+    id,
+    restaurant_id: restaurantId,
+    createdAt: purchase.createdAt || nowIso
+  };
+
+  // Update Raw Materials stock and log PURCHASE movements
+  for (const item of savedRecord.items) {
+    if (item.quantity > 0 && item.rawMaterialId) {
+      await updateRawMaterialStock({
+        rawMaterialId: item.rawMaterialId,
+        action: 'PURCHASE',
+        quantity: item.quantity,
+        reason: 'Purchase Stock-In',
+        updatedBy: savedRecord.recordedBy || 'Store Manager',
+        notes: `Invoice #${savedRecord.invoiceNumber} from ${savedRecord.supplierName}`,
+        referenceType: 'PURCHASE',
+        referenceId: savedRecord.invoiceNumber || savedRecord.id,
+        unitPrice: item.unitPrice,
+        restaurantId
+      });
+    }
+  }
+
+  const updatedPurchases = [savedRecord, ...current];
+  saveStoredPurchases(updatedPurchases, restaurantId);
+
+  window.dispatchEvent(new CustomEvent('rbh_purchases_updated', { detail: { purchase: savedRecord, restaurantId } }));
+  if (ordersBroadcastChannel) {
+    try {
+      ordersBroadcastChannel.postMessage({ type: 'PURCHASES_UPDATED', purchase: savedRecord, restaurantId });
+    } catch (e) {}
+  }
+
+  // Push to Supabase
+  const supabase = getSupabaseClient();
+  if (supabase) {
+    Promise.resolve(
+      supabase.from('inventory_purchases').insert([{
+        id: savedRecord.id,
+        restaurant_id: restaurantId,
+        invoice_number: savedRecord.invoiceNumber,
+        supplier_name: savedRecord.supplierName,
+        purchase_date: savedRecord.purchaseDate,
+        total_amount: savedRecord.totalAmount,
+        payment_status: savedRecord.paymentStatus,
+        payment_mode: savedRecord.paymentMode,
+        notes: savedRecord.notes,
+        recorded_by: savedRecord.recordedBy,
+        created_at: savedRecord.createdAt
+      }])
+    ).then(() => {
+      if (savedRecord.items && savedRecord.items.length > 0) {
+        const itemRows = savedRecord.items.map(item => ({
+          id: item.id || `pi-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          restaurant_id: restaurantId,
+          purchase_id: savedRecord.id,
+          raw_material_id: item.rawMaterialId,
+          raw_material_name: item.rawMaterialName,
+          quantity: item.quantity,
+          unit: item.unit,
+          unit_price: item.unitPrice,
+          total_price: item.totalPrice,
+          expiry_date: item.expiryDate
+        }));
+        return supabase.from('inventory_purchase_items').insert(itemRows);
+      }
+    }).catch(() => {});
+  }
+
+  return savedRecord;
+}
+
+// ----------------------------------------------------
+// INVENTORY WASTAGE LOGGING (PHASE 2)
+// ----------------------------------------------------
+
+export function getStoredWastage(restaurantId: string = getCurrentRestaurantId()): InventoryWastageRecord[] {
+  try {
+    const tenantKey = getTenantStorageKey(INVENTORY_WASTAGE_STORAGE_KEY, restaurantId);
+    const saved = localStorage.getItem(tenantKey) || (restaurantId === DEFAULT_RESTAURANT_ID ? localStorage.getItem(INVENTORY_WASTAGE_STORAGE_KEY) : null);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        return parsed.map(w => ({
+          ...w,
+          restaurant_id: w.restaurant_id || restaurantId
+        }));
+      }
+    }
+  } catch (e) {
+    console.error('Failed to read wastage from storage', e);
+  }
+
+  if (restaurantId === DEFAULT_RESTAURANT_ID) {
+    try {
+      const initialized = DEFAULT_WASTAGE_RECORDS.map(w => ({ ...w, restaurant_id: DEFAULT_RESTAURANT_ID }));
+      saveStoredWastage(initialized, DEFAULT_RESTAURANT_ID);
+      return initialized;
+    } catch (e) {}
+    return DEFAULT_WASTAGE_RECORDS;
+  }
+  return [];
+}
+
+export function saveStoredWastage(wastage: InventoryWastageRecord[], restaurantId: string = getCurrentRestaurantId()): void {
+  try {
+    const tenantKey = getTenantStorageKey(INVENTORY_WASTAGE_STORAGE_KEY, restaurantId);
+    localStorage.setItem(tenantKey, JSON.stringify(wastage.slice(0, 200)));
+    if (restaurantId === DEFAULT_RESTAURANT_ID) {
+      localStorage.setItem(INVENTORY_WASTAGE_STORAGE_KEY, JSON.stringify(wastage.slice(0, 200)));
+    }
+  } catch (e) {
+    console.error('Failed to save wastage to storage', e);
+  }
+}
+
+export async function fetchStoredWastage(
+  restaurantId: string = getCurrentRestaurantId()
+): Promise<{ wastage: InventoryWastageRecord[]; source: 'supabase' | 'local' }> {
+  const supabase = getSupabaseClient();
+  if (supabase) {
+    try {
+      const { data, error } = await supabase
+        .from('inventory_wastage')
+        .select('*')
+        .eq('restaurant_id', restaurantId)
+        .order('created_at', { ascending: false });
+
+      if (!error && data && data.length > 0) {
+        const mapped: InventoryWastageRecord[] = data.map((row: any) => ({
+          id: String(row.id),
+          restaurant_id: row.restaurant_id || restaurantId,
+          rawMaterialId: row.raw_material_id || row.rawMaterialId,
+          rawMaterialName: row.raw_material_name || row.rawMaterialName,
+          quantity: Number(row.quantity ?? 0),
+          unit: row.unit || 'kg',
+          reason: row.reason || 'Spoilage',
+          unitCost: row.unit_cost ? Number(row.unit_cost) : undefined,
+          estimatedLossValue: Number(row.estimated_loss_value ?? row.estimatedLossValue ?? 0),
+          date: row.date || new Date().toISOString().split('T')[0],
+          recordedBy: row.recorded_by || row.recordedBy || 'Kitchen Chef',
+          notes: row.notes,
+          createdAt: row.created_at || row.createdAt || new Date().toISOString()
+        }));
+        saveStoredWastage(mapped, restaurantId);
+        return { wastage: mapped, source: 'supabase' };
+      }
+    } catch (e) {
+      console.warn('Failed to fetch wastage from Supabase, using local:', e);
+    }
+  }
+  return { wastage: getStoredWastage(restaurantId), source: 'local' };
+}
+
+export async function recordInventoryWastage(
+  wastage: Omit<InventoryWastageRecord, 'id' | 'createdAt'> & { id?: string; createdAt?: string },
+  restaurantId: string = getCurrentRestaurantId()
+): Promise<InventoryWastageRecord> {
+  const current = getStoredWastage(restaurantId);
+  const rawMaterials = getStoredRawMaterials(restaurantId);
+  const mat = rawMaterials.find(m => m.id === wastage.rawMaterialId);
+  const id = wastage.id || `WST-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  const nowIso = new Date().toISOString();
+
+  let estimatedLoss = wastage.estimatedLossValue;
+  if (!estimatedLoss && mat && mat.purchasePrice) {
+    estimatedLoss = Math.round(wastage.quantity * mat.purchasePrice * 100) / 100;
+  }
+
+  const savedRecord: InventoryWastageRecord = {
+    ...wastage,
+    id,
+    restaurant_id: restaurantId,
+    estimatedLossValue: estimatedLoss || 0,
+    unitCost: wastage.unitCost || mat?.purchasePrice,
+    createdAt: wastage.createdAt || nowIso
+  };
+
+  // Deduct from Raw Materials and log WASTAGE movement
+  await updateRawMaterialStock({
+    rawMaterialId: savedRecord.rawMaterialId,
+    action: 'WASTAGE',
+    quantity: savedRecord.quantity,
+    reason: `Wastage: ${savedRecord.reason}`,
+    updatedBy: savedRecord.recordedBy || 'Kitchen Chef',
+    notes: savedRecord.notes || `Kitchen Wastage Log (${savedRecord.reason})`,
+    referenceType: 'WASTAGE',
+    referenceId: savedRecord.id,
+    unitPrice: savedRecord.unitCost,
+    restaurantId
+  });
+
+  const updatedWastage = [savedRecord, ...current];
+  saveStoredWastage(updatedWastage, restaurantId);
+
+  window.dispatchEvent(new CustomEvent('rbh_wastage_updated', { detail: { wastage: savedRecord, restaurantId } }));
+  if (ordersBroadcastChannel) {
+    try {
+      ordersBroadcastChannel.postMessage({ type: 'WASTAGE_UPDATED', wastage: savedRecord, restaurantId });
+    } catch (e) {}
+  }
+
+  const supabase = getSupabaseClient();
+  if (supabase) {
+    Promise.resolve(
+      supabase.from('inventory_wastage').insert([{
+        id: savedRecord.id,
+        restaurant_id: restaurantId,
+        raw_material_id: savedRecord.rawMaterialId,
+        raw_material_name: savedRecord.rawMaterialName,
+        quantity: savedRecord.quantity,
+        unit: savedRecord.unit,
+        reason: savedRecord.reason,
+        unit_cost: savedRecord.unitCost,
+        estimated_loss_value: savedRecord.estimatedLossValue,
+        date: savedRecord.date,
+        recorded_by: savedRecord.recordedBy,
+        notes: savedRecord.notes,
+        created_at: savedRecord.createdAt
       }])
     ).catch(() => {});
   }
 
-  return newItem;
+  return savedRecord;
+}
+
+// ----------------------------------------------------
+// PHYSICAL STOCK ADJUSTMENT / RECONCILIATION AUDIT
+// ----------------------------------------------------
+
+export async function recordStockAdjustment(params: {
+  rawMaterialId: string;
+  actualCount: number;
+  reason: 'Physical Audit Adjustment' | 'Stock correction' | 'Other' | string;
+  auditedBy: string;
+  notes?: string;
+  restaurantId?: string;
+}): Promise<RawMaterial | null> {
+  const restaurantId = params.restaurantId || getCurrentRestaurantId();
+  return updateRawMaterialStock({
+    rawMaterialId: params.rawMaterialId,
+    action: 'ADJUSTMENT',
+    quantity: Math.max(0, params.actualCount),
+    reason: params.reason || 'Physical Audit Adjustment',
+    updatedBy: params.auditedBy || 'Store Auditor',
+    notes: params.notes || 'Physical inventory audit reconciliation',
+    referenceType: 'PHYSICAL_AUDIT',
+    restaurantId
+  });
+}
+
+// ----------------------------------------------------
+// AUTOMATIC SALE INVENTORY CONSUMPTION ENGINE (IDEMPOTENT)
+// ----------------------------------------------------
+
+export function getStoredConsumedOrderIds(restaurantId: string = getCurrentRestaurantId()): Set<string> {
+  try {
+    const tenantKey = getTenantStorageKey(CONSUMED_ORDERS_STORAGE_KEY, restaurantId);
+    const saved = localStorage.getItem(tenantKey) || (restaurantId === DEFAULT_RESTAURANT_ID ? localStorage.getItem(CONSUMED_ORDERS_STORAGE_KEY) : null);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (Array.isArray(parsed)) {
+        return new Set(parsed);
+      }
+    }
+  } catch (e) {
+    console.error('Failed to read consumed orders ledger', e);
+  }
+  return new Set();
+}
+
+export function markOrderAsConsumed(orderId: string, restaurantId: string = getCurrentRestaurantId()): void {
+  try {
+    const consumed = getStoredConsumedOrderIds(restaurantId);
+    consumed.add(orderId);
+    const tenantKey = getTenantStorageKey(CONSUMED_ORDERS_STORAGE_KEY, restaurantId);
+    const arr = Array.from(consumed);
+    localStorage.setItem(tenantKey, JSON.stringify(arr));
+    if (restaurantId === DEFAULT_RESTAURANT_ID) {
+      localStorage.setItem(CONSUMED_ORDERS_STORAGE_KEY, JSON.stringify(arr));
+    }
+  } catch (e) {
+    console.error('Failed to mark order as consumed in storage', e);
+  }
+
+  // Push to Supabase consumed orders table
+  const supabase = getSupabaseClient();
+  if (supabase) {
+    Promise.resolve(
+      supabase.from('inventory_order_consumptions').insert([{
+        id: `ioc-${orderId}-${Date.now()}`,
+        restaurant_id: restaurantId,
+        order_id: orderId,
+        consumed_at: new Date().toISOString()
+      }])
+    ).catch(() => {});
+  }
+}
+
+export async function consumeInventoryForOrders(
+  orders: Order[],
+  restaurantId: string = getCurrentRestaurantId()
+): Promise<{ success: boolean; itemsConsumed: number; movementsLogged: number }> {
+  if (!orders || orders.length === 0) {
+    return { success: true, itemsConsumed: 0, movementsLogged: 0 };
+  }
+
+  const consumedSet = getStoredConsumedOrderIds(restaurantId);
+  const recipes = getStoredRecipes(restaurantId);
+  const rawMaterials = getStoredRawMaterials(restaurantId);
+  let totalItemsConsumed = 0;
+  let totalMovementsLogged = 0;
+
+  for (const order of orders) {
+    // IDEMPOTENCY CHECK: if order was already consumed, skip!
+    if (consumedSet.has(order.id)) {
+      continue;
+    }
+
+    if (!order.items || order.items.length === 0) {
+      markOrderAsConsumed(order.id, restaurantId);
+      continue;
+    }
+
+    // Process each ordered item and match its recipe
+    for (const item of order.items) {
+      const orderItemQty = item.quantity || 1;
+      
+      // Match recipe by menuItemId or matching name
+      const itemName = item.name || (item as any).Name || '';
+      const recipe = recipes.find(r => {
+        if (String(r.menuItemId) === String(item.id)) return true;
+        if (r.menuItemName && itemName && r.menuItemName.trim().toLowerCase() === itemName.trim().toLowerCase()) return true;
+        return false;
+      });
+
+      if (recipe && recipe.ingredients && recipe.ingredients.length > 0) {
+        for (const ing of recipe.ingredients) {
+          const mat = rawMaterials.find(m => m.id === ing.rawMaterialId);
+          if (mat) {
+            // Calculate consumption quantity converted to raw material unit
+            const singlePortionQtyInMatUnit = convertUnits(ing.quantity, ing.unit, mat.unit);
+            const totalDeduction = Math.round(singlePortionQtyInMatUnit * orderItemQty * 1000) / 1000;
+
+            if (totalDeduction > 0) {
+              await updateRawMaterialStock({
+                rawMaterialId: mat.id,
+                action: 'SALE_CONSUMPTION',
+                quantity: totalDeduction,
+                reason: 'Order Sale Consumption',
+                updatedBy: 'System (POS Settle)',
+                notes: `Auto-consumption for Order #${order.id} (${order.tableNumber}) - ${itemName} x${orderItemQty}`,
+                referenceType: 'ORDER',
+                referenceId: order.id,
+                restaurantId
+              });
+              totalMovementsLogged++;
+            }
+          }
+        }
+        totalItemsConsumed++;
+      }
+    }
+
+    // Mark order as consumed
+    markOrderAsConsumed(order.id, restaurantId);
+  }
+
+  return {
+    success: true,
+    itemsConsumed: totalItemsConsumed,
+    movementsLogged: totalMovementsLogged
+  };
 }
 
 export function subscribeToRawMaterialsRealtime(onRawMaterialsChange: () => void): () => void {
   const handleLocal = () => onRawMaterialsChange();
   const handleBroadcast = (event: MessageEvent) => {
-    if (event.data && event.data.type === 'RAW_MATERIALS_UPDATED') {
+    if (event.data && (
+      event.data.type === 'RAW_MATERIALS_UPDATED' || 
+      event.data.type === 'RECIPES_UPDATED' || 
+      event.data.type === 'PURCHASES_UPDATED' || 
+      event.data.type === 'WASTAGE_UPDATED'
+    )) {
       onRawMaterialsChange();
     }
   };
   const handleStorage = (event: StorageEvent) => {
-    if (event.key === RAW_MATERIALS_STORAGE_KEY || event.key === STOCK_MOVEMENTS_STORAGE_KEY) {
+    if (
+      event.key === RAW_MATERIALS_STORAGE_KEY || 
+      event.key === STOCK_MOVEMENTS_STORAGE_KEY ||
+      event.key === MENU_RECIPES_STORAGE_KEY ||
+      event.key === INVENTORY_PURCHASES_STORAGE_KEY ||
+      event.key === INVENTORY_WASTAGE_STORAGE_KEY
+    ) {
       onRawMaterialsChange();
     }
   };
 
   window.addEventListener('rbh_raw_materials_updated', handleLocal);
+  window.addEventListener('rbh_recipes_updated', handleLocal);
+  window.addEventListener('rbh_purchases_updated', handleLocal);
+  window.addEventListener('rbh_wastage_updated', handleLocal);
   window.addEventListener('storage', handleStorage);
   if (ordersBroadcastChannel) {
     ordersBroadcastChannel.addEventListener('message', handleBroadcast);
@@ -2493,6 +4841,12 @@ export function subscribeToRawMaterialsRealtime(onRawMaterialsChange: () => void
         .on('postgres_changes', { event: '*', schema: 'public', table: 'raw_materials' }, () => {
           onRawMaterialsChange();
         })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'stock_movements' }, () => {
+          onRawMaterialsChange();
+        })
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'menu_item_recipes' }, () => {
+          onRawMaterialsChange();
+        })
         .on('broadcast', { event: 'raw_materials_updated' }, () => {
           onRawMaterialsChange();
         })
@@ -2502,6 +4856,9 @@ export function subscribeToRawMaterialsRealtime(onRawMaterialsChange: () => void
 
   return () => {
     window.removeEventListener('rbh_raw_materials_updated', handleLocal);
+    window.removeEventListener('rbh_recipes_updated', handleLocal);
+    window.removeEventListener('rbh_purchases_updated', handleLocal);
+    window.removeEventListener('rbh_wastage_updated', handleLocal);
     window.removeEventListener('storage', handleStorage);
     if (ordersBroadcastChannel) {
       ordersBroadcastChannel.removeEventListener('message', handleBroadcast);
@@ -2623,7 +4980,7 @@ export function generateProductionSqlSecurityScript(restaurantId: string = getCu
 -- 1. EXTENSIONS
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
--- 2. RESTAURANTS PROFILE TABLE
+-- 2. RESTAURANTS PROFILE & SETTINGS TABLES
 CREATE TABLE IF NOT EXISTS public.restaurants (
     id VARCHAR(64) PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
@@ -2636,12 +4993,84 @@ CREATE TABLE IF NOT EXISTS public.restaurants (
     updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE TABLE IF NOT EXISTS public.restaurant_settings (
+    id VARCHAR(64) PRIMARY KEY,
+    restaurant_id VARCHAR(64) UNIQUE NOT NULL REFERENCES public.restaurants(id) ON DELETE CASCADE,
+    name VARCHAR(255) NOT NULL,
+    logo TEXT,
+    tagline VARCHAR(255),
+    address TEXT,
+    phone VARCHAR(32),
+    email VARCHAR(255),
+    opening_time VARCHAR(32) DEFAULT '11:00 AM',
+    closing_time VARCHAR(32) DEFAULT '11:00 PM',
+    restaurant_type VARCHAR(64) DEFAULT 'Dine-In & Takeaway',
+    gst_enabled BOOLEAN DEFAULT TRUE,
+    gst_rate NUMERIC(5, 2) DEFAULT 5.00,
+    service_charge_enabled BOOLEAN DEFAULT FALSE,
+    service_charge_rate NUMERIC(5, 2) DEFAULT 5.00,
+    receipt_footer TEXT DEFAULT 'Thank you for dining with us! Please visit again.',
+    currency VARCHAR(8) DEFAULT 'INR',
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Insert Default Tenant
 INSERT INTO public.restaurants (id, name, tagline, address, phone, currency, tax_rate)
 VALUES ('${restaurantId}', 'Royal Biryani House', 'Authentic Dum Biryani & Mughlai Cuisine', '124 Heritage Lane, Connaught Place, New Delhi', '+91 98765 43210', 'INR', 5.00)
 ON CONFLICT (id) DO NOTHING;
 
--- 3. STAFF & RBAC ROLES TABLE
+INSERT INTO public.restaurant_settings (id, restaurant_id, name, tagline, address, phone, email, opening_time, closing_time, restaurant_type, gst_enabled, gst_rate, service_charge_enabled, service_charge_rate, receipt_footer)
+VALUES ('${restaurantId}', '${restaurantId}', 'Royal Biryani House', 'Authentic Dum Biryani & Mughlai Cuisine', '124 Heritage Lane, Connaught Place, New Delhi', '+91 98765 43210', 'contact@royalbiryani.com', '11:00 AM', '11:00 PM', 'Dine-In & Takeaway', TRUE, 5.00, FALSE, 5.00, 'Thank you for dining at Royal Biryani House! Please visit again.')
+ON CONFLICT (restaurant_id) DO NOTHING;
+
+-- 3. RESTAURANT TABLES TABLE
+CREATE TABLE IF NOT EXISTS public.restaurant_tables (
+    id VARCHAR(64) PRIMARY KEY,
+    restaurant_id VARCHAR(64) NOT NULL REFERENCES public.restaurants(id) ON DELETE CASCADE,
+    table_number VARCHAR(32) NOT NULL,
+    section VARCHAR(64) NOT NULL DEFAULT 'Ground Floor',
+    capacity INTEGER NOT NULL DEFAULT 4,
+    is_active BOOLEAN DEFAULT TRUE,
+    display_order INTEGER DEFAULT 0,
+    qr_code_url TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_tables_restaurant ON public.restaurant_tables(restaurant_id);
+CREATE INDEX IF NOT EXISTS idx_tables_section ON public.restaurant_tables(restaurant_id, section);
+
+-- 4. MENU CATEGORIES & SUBCATEGORIES TABLES
+CREATE TABLE IF NOT EXISTS public.menu_categories (
+    id VARCHAR(64) PRIMARY KEY,
+    restaurant_id VARCHAR(64) NOT NULL REFERENCES public.restaurants(id) ON DELETE CASCADE,
+    name VARCHAR(255) NOT NULL,
+    description TEXT,
+    icon VARCHAR(64) DEFAULT 'Utensils',
+    display_order INTEGER DEFAULT 0,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_categories_restaurant ON public.menu_categories(restaurant_id);
+
+CREATE TABLE IF NOT EXISTS public.menu_subcategories (
+    id VARCHAR(64) PRIMARY KEY,
+    restaurant_id VARCHAR(64) NOT NULL REFERENCES public.restaurants(id) ON DELETE CASCADE,
+    category_id VARCHAR(64) NOT NULL,
+    name VARCHAR(255) NOT NULL,
+    description TEXT,
+    display_order INTEGER DEFAULT 0,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_subcategories_category ON public.menu_subcategories(restaurant_id, category_id);
+
+-- 5. STAFF & RBAC ROLES TABLE
 CREATE TABLE IF NOT EXISTS public.staff_accounts (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
@@ -2657,18 +5086,30 @@ CREATE TABLE IF NOT EXISTS public.staff_accounts (
 CREATE INDEX IF NOT EXISTS idx_staff_restaurant ON public.staff_accounts(restaurant_id);
 CREATE INDEX IF NOT EXISTS idx_staff_user ON public.staff_accounts(user_id);
 
--- 4. MENU ITEMS TABLE
+-- 6. MENU ITEMS TABLE (WITH VARIANTS & ADDONS JSONB SUPPORT)
 CREATE TABLE IF NOT EXISTS public.menu_items (
     id VARCHAR(64) PRIMARY KEY,
     restaurant_id VARCHAR(64) NOT NULL REFERENCES public.restaurants(id) ON DELETE CASCADE,
     name VARCHAR(255) NOT NULL,
     category VARCHAR(64) NOT NULL,
+    category_id VARCHAR(64),
+    subcategory_id VARCHAR(64),
+    subcategory_name VARCHAR(255),
     price NUMERIC(10, 2) NOT NULL,
+    base_price NUMERIC(10, 2),
     description TEXT,
     image_url TEXT,
     available BOOLEAN DEFAULT TRUE,
+    is_veg BOOLEAN DEFAULT FALSE,
+    veg_type VARCHAR(32) DEFAULT 'Non-Veg',
+    is_spicy BOOLEAN DEFAULT FALSE,
+    is_bestseller BOOLEAN DEFAULT FALSE,
+    prep_time VARCHAR(32) DEFAULT '15-20 mins',
     stock_status VARCHAR(32) DEFAULT 'In Stock',
     stock_count INTEGER DEFAULT 50,
+    variants JSONB DEFAULT '[]'::jsonb,
+    addons JSONB DEFAULT '[]'::jsonb,
+    display_order INTEGER DEFAULT 0,
     is_archived BOOLEAN DEFAULT FALSE,
     created_at TIMESTAMPTZ DEFAULT NOW(),
     updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -2725,16 +5166,23 @@ CREATE INDEX IF NOT EXISTS idx_payments_restaurant ON public.royal_payments(rest
 CREATE INDEX IF NOT EXISTS idx_payments_session ON public.royal_payments(restaurant_id, session_id);
 CREATE INDEX IF NOT EXISTS idx_payments_created ON public.royal_payments(restaurant_id, created_at DESC);
 
--- 7. RAW MATERIALS & INVENTORY TABLE
+-- 7. RAW MATERIALS & INVENTORY TABLE (PHASE 2 ENHANCED)
 CREATE TABLE IF NOT EXISTS public.raw_materials (
     id VARCHAR(64) PRIMARY KEY,
     restaurant_id VARCHAR(64) NOT NULL REFERENCES public.restaurants(id) ON DELETE CASCADE,
+    sku VARCHAR(64),
     name VARCHAR(255) NOT NULL,
     category VARCHAR(64) DEFAULT 'Kitchen Staples',
-    quantity NUMERIC(10, 2) NOT NULL DEFAULT 0,
+    quantity NUMERIC(12, 3) NOT NULL DEFAULT 0,
     unit VARCHAR(16) NOT NULL DEFAULT 'kg',
     minimum_threshold NUMERIC(10, 2) NOT NULL DEFAULT 5,
+    reorder_level NUMERIC(10, 2),
+    max_stock NUMERIC(10, 2),
+    purchase_price NUMERIC(10, 2),
+    supplier VARCHAR(255),
     status VARCHAR(32) DEFAULT 'IN STOCK',
+    is_active BOOLEAN DEFAULT TRUE,
+    notes TEXT,
     last_updated_by VARCHAR(255) DEFAULT 'Kitchen Chef',
     is_archived BOOLEAN DEFAULT FALSE,
     updated_at TIMESTAMPTZ DEFAULT NOW(),
@@ -2742,19 +5190,24 @@ CREATE TABLE IF NOT EXISTS public.raw_materials (
 );
 
 CREATE INDEX IF NOT EXISTS idx_raw_materials_restaurant ON public.raw_materials(restaurant_id);
+CREATE INDEX IF NOT EXISTS idx_raw_materials_sku ON public.raw_materials(restaurant_id, sku);
 
--- 8. STOCK MOVEMENTS AUDIT LOG TABLE
+-- 8. STOCK MOVEMENTS AUDIT LOG TABLE (PHASE 2 ENHANCED)
 CREATE TABLE IF NOT EXISTS public.stock_movements (
     id VARCHAR(64) PRIMARY KEY,
     restaurant_id VARCHAR(64) NOT NULL REFERENCES public.restaurants(id) ON DELETE CASCADE,
     raw_material_id VARCHAR(64) NOT NULL REFERENCES public.raw_materials(id) ON DELETE CASCADE,
     raw_material_name VARCHAR(255) NOT NULL,
-    movement_type VARCHAR(16) NOT NULL CHECK (movement_type IN ('add', 'reduce', 'set')),
-    quantity_change NUMERIC(10, 2) NOT NULL,
-    previous_quantity NUMERIC(10, 2) NOT NULL,
-    new_quantity NUMERIC(10, 2) NOT NULL,
+    movement_type VARCHAR(32) NOT NULL,
+    quantity_change NUMERIC(12, 3) NOT NULL,
+    previous_quantity NUMERIC(12, 3) NOT NULL,
+    new_quantity NUMERIC(12, 3) NOT NULL,
     unit VARCHAR(16) NOT NULL,
-    reason VARCHAR(64) NOT NULL,
+    cost_per_unit NUMERIC(10, 2),
+    total_cost NUMERIC(10, 2),
+    reference_type VARCHAR(32),
+    reference_id VARCHAR(64),
+    reason VARCHAR(128) NOT NULL,
     notes TEXT,
     updated_by VARCHAR(255) NOT NULL,
     created_at TIMESTAMPTZ DEFAULT NOW()
@@ -2762,8 +5215,106 @@ CREATE TABLE IF NOT EXISTS public.stock_movements (
 
 CREATE INDEX IF NOT EXISTS idx_movements_restaurant ON public.stock_movements(restaurant_id);
 CREATE INDEX IF NOT EXISTS idx_movements_material ON public.stock_movements(restaurant_id, raw_material_id);
+CREATE INDEX IF NOT EXISTS idx_movements_created ON public.stock_movements(restaurant_id, created_at DESC);
 
--- 9. CUSTOMER FEEDBACK TABLE
+-- 9. RECIPES & INGREDIENT BOM (BILL OF MATERIALS) TABLES
+CREATE TABLE IF NOT EXISTS public.menu_item_recipes (
+    id VARCHAR(64) PRIMARY KEY,
+    restaurant_id VARCHAR(64) NOT NULL REFERENCES public.restaurants(id) ON DELETE CASCADE,
+    menu_item_id VARCHAR(64) NOT NULL,
+    menu_item_name VARCHAR(255) NOT NULL,
+    variant_id VARCHAR(64),
+    variant_name VARCHAR(255),
+    yield_quantity NUMERIC(8, 2) DEFAULT 1,
+    portion_size VARCHAR(64),
+    prep_instructions TEXT,
+    calculated_cost NUMERIC(10, 2),
+    selling_price NUMERIC(10, 2),
+    food_cost_percentage NUMERIC(5, 2),
+    updated_at TIMESTAMPTZ DEFAULT NOW(),
+    updated_by VARCHAR(255) DEFAULT 'Executive Chef'
+);
+
+CREATE INDEX IF NOT EXISTS idx_recipes_restaurant ON public.menu_item_recipes(restaurant_id);
+CREATE INDEX IF NOT EXISTS idx_recipes_item ON public.menu_item_recipes(restaurant_id, menu_item_id);
+
+CREATE TABLE IF NOT EXISTS public.menu_item_recipe_ingredients (
+    id VARCHAR(64) PRIMARY KEY,
+    restaurant_id VARCHAR(64) NOT NULL REFERENCES public.restaurants(id) ON DELETE CASCADE,
+    recipe_id VARCHAR(64) NOT NULL REFERENCES public.menu_item_recipes(id) ON DELETE CASCADE,
+    raw_material_id VARCHAR(64) NOT NULL REFERENCES public.raw_materials(id) ON DELETE CASCADE,
+    raw_material_name VARCHAR(255) NOT NULL,
+    quantity NUMERIC(12, 3) NOT NULL,
+    unit VARCHAR(16) NOT NULL,
+    is_optional BOOLEAN DEFAULT FALSE,
+    estimated_cost NUMERIC(10, 2),
+    notes TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_recipe_ingredients_recipe ON public.menu_item_recipe_ingredients(recipe_id);
+
+-- 10. INVENTORY PURCHASES & STOCK-IN TABLE
+CREATE TABLE IF NOT EXISTS public.inventory_purchases (
+    id VARCHAR(64) PRIMARY KEY,
+    restaurant_id VARCHAR(64) NOT NULL REFERENCES public.restaurants(id) ON DELETE CASCADE,
+    invoice_number VARCHAR(64) NOT NULL,
+    supplier_name VARCHAR(255) NOT NULL,
+    purchase_date DATE NOT NULL,
+    total_amount NUMERIC(10, 2) NOT NULL DEFAULT 0,
+    payment_status VARCHAR(32) DEFAULT 'Paid',
+    payment_mode VARCHAR(32) DEFAULT 'UPI',
+    notes TEXT,
+    recorded_by VARCHAR(255) DEFAULT 'Store Manager',
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_purchases_restaurant ON public.inventory_purchases(restaurant_id);
+
+CREATE TABLE IF NOT EXISTS public.inventory_purchase_items (
+    id VARCHAR(64) PRIMARY KEY,
+    restaurant_id VARCHAR(64) NOT NULL REFERENCES public.restaurants(id) ON DELETE CASCADE,
+    purchase_id VARCHAR(64) NOT NULL REFERENCES public.inventory_purchases(id) ON DELETE CASCADE,
+    raw_material_id VARCHAR(64) NOT NULL REFERENCES public.raw_materials(id) ON DELETE CASCADE,
+    raw_material_name VARCHAR(255) NOT NULL,
+    quantity NUMERIC(12, 3) NOT NULL,
+    unit VARCHAR(16) NOT NULL,
+    unit_price NUMERIC(10, 2) NOT NULL,
+    total_price NUMERIC(10, 2) NOT NULL,
+    expiry_date DATE
+);
+
+CREATE INDEX IF NOT EXISTS idx_purchase_items_purchase ON public.inventory_purchase_items(purchase_id);
+
+-- 11. INVENTORY WASTAGE / LOSS TABLE
+CREATE TABLE IF NOT EXISTS public.inventory_wastage (
+    id VARCHAR(64) PRIMARY KEY,
+    restaurant_id VARCHAR(64) NOT NULL REFERENCES public.restaurants(id) ON DELETE CASCADE,
+    raw_material_id VARCHAR(64) NOT NULL REFERENCES public.raw_materials(id) ON DELETE CASCADE,
+    raw_material_name VARCHAR(255) NOT NULL,
+    quantity NUMERIC(12, 3) NOT NULL,
+    unit VARCHAR(16) NOT NULL,
+    reason VARCHAR(64) NOT NULL,
+    unit_cost NUMERIC(10, 2),
+    estimated_loss_value NUMERIC(10, 2),
+    date DATE NOT NULL,
+    recorded_by VARCHAR(255) DEFAULT 'Kitchen Chef',
+    notes TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_wastage_restaurant ON public.inventory_wastage(restaurant_id);
+
+-- 12. IDEMPOTENT ORDER CONSUMPTION TRACKER TABLE
+CREATE TABLE IF NOT EXISTS public.inventory_order_consumptions (
+    id VARCHAR(64) PRIMARY KEY,
+    restaurant_id VARCHAR(64) NOT NULL REFERENCES public.restaurants(id) ON DELETE CASCADE,
+    order_id VARCHAR(64) NOT NULL,
+    consumed_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_order_consumption_unique ON public.inventory_order_consumptions(restaurant_id, order_id);
+
+-- 13. CUSTOMER FEEDBACK TABLE
 CREATE TABLE IF NOT EXISTS public.customer_feedback (
     feedback_id VARCHAR(64) PRIMARY KEY,
     restaurant_id VARCHAR(64) NOT NULL REFERENCES public.restaurants(id) ON DELETE CASCADE,
@@ -2785,6 +5336,10 @@ CREATE INDEX IF NOT EXISTS idx_feedback_restaurant ON public.customer_feedback(r
 
 -- Enable RLS on all tables
 ALTER TABLE public.restaurants ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.restaurant_settings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.restaurant_tables ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.menu_categories ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.menu_subcategories ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.staff_accounts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.menu_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.royal_orders ENABLE ROW LEVEL SECURITY;
@@ -2802,6 +5357,40 @@ STABLE
 AS $$
     SELECT restaurant_id FROM public.staff_accounts WHERE user_id = auth.uid() LIMIT 1;
 $$;
+
+-- RLS POLICIES FOR SETTINGS & TABLES
+CREATE POLICY "Public can view restaurant settings"
+ON public.restaurant_settings FOR SELECT
+USING (true);
+
+CREATE POLICY "Staff can manage restaurant settings"
+ON public.restaurant_settings FOR ALL
+USING (restaurant_id = public.get_auth_restaurant_id() OR auth.role() = 'anon');
+
+CREATE POLICY "Public can view active restaurant tables"
+ON public.restaurant_tables FOR SELECT
+USING (is_active = true);
+
+CREATE POLICY "Staff can manage restaurant tables"
+ON public.restaurant_tables FOR ALL
+USING (restaurant_id = public.get_auth_restaurant_id() OR auth.role() = 'anon');
+
+-- RLS POLICIES FOR MENU CATEGORIES & SUBCATEGORIES
+CREATE POLICY "Public can view active menu categories"
+ON public.menu_categories FOR SELECT
+USING (is_active = true);
+
+CREATE POLICY "Staff can manage menu categories"
+ON public.menu_categories FOR ALL
+USING (restaurant_id = public.get_auth_restaurant_id() OR auth.role() = 'anon');
+
+CREATE POLICY "Public can view active menu subcategories"
+ON public.menu_subcategories FOR SELECT
+USING (is_active = true);
+
+CREATE POLICY "Staff can manage menu subcategories"
+ON public.menu_subcategories FOR ALL
+USING (restaurant_id = public.get_auth_restaurant_id() OR auth.role() = 'anon');
 
 -- RLS POLICIES FOR MENU ITEMS
 -- Public/Customers can read menu items of any valid restaurant
@@ -2843,12 +5432,12 @@ CREATE POLICY "Staff can void payments for their restaurant"
 ON public.royal_payments FOR UPDATE
 USING (restaurant_id = public.get_auth_restaurant_id() OR auth.role() = 'anon');
 
--- RLS POLICIES FOR RAW MATERIALS & STOCK MOVEMENTS
-CREATE POLICY "Kitchen and Managers can view inventory"
+-- RLS POLICIES FOR RAW MATERIALS, STOCK MOVEMENTS, RECIPES & PURCHASES (PHASE 2)
+CREATE POLICY "Staff can view raw materials"
 ON public.raw_materials FOR SELECT
 USING (restaurant_id = public.get_auth_restaurant_id() OR auth.role() = 'anon');
 
-CREATE POLICY "Kitchen and Managers can manage inventory"
+CREATE POLICY "Staff can manage raw materials"
 ON public.raw_materials FOR ALL
 USING (restaurant_id = public.get_auth_restaurant_id() OR auth.role() = 'anon');
 
@@ -2859,6 +5448,34 @@ USING (restaurant_id = public.get_auth_restaurant_id() OR auth.role() = 'anon');
 CREATE POLICY "Audit log stock movements insert"
 ON public.stock_movements FOR INSERT
 WITH CHECK (true);
+
+CREATE POLICY "Staff can view recipes"
+ON public.menu_item_recipes FOR SELECT
+USING (restaurant_id = public.get_auth_restaurant_id() OR auth.role() = 'anon');
+
+CREATE POLICY "Staff can manage recipes"
+ON public.menu_item_recipes FOR ALL
+USING (restaurant_id = public.get_auth_restaurant_id() OR auth.role() = 'anon');
+
+CREATE POLICY "Staff can manage recipe ingredients"
+ON public.menu_item_recipe_ingredients FOR ALL
+USING (restaurant_id = public.get_auth_restaurant_id() OR auth.role() = 'anon');
+
+CREATE POLICY "Staff can manage purchases"
+ON public.inventory_purchases FOR ALL
+USING (restaurant_id = public.get_auth_restaurant_id() OR auth.role() = 'anon');
+
+CREATE POLICY "Staff can manage purchase items"
+ON public.inventory_purchase_items FOR ALL
+USING (restaurant_id = public.get_auth_restaurant_id() OR auth.role() = 'anon');
+
+CREATE POLICY "Staff can manage wastage"
+ON public.inventory_wastage FOR ALL
+USING (restaurant_id = public.get_auth_restaurant_id() OR auth.role() = 'anon');
+
+CREATE POLICY "Staff can manage order consumptions"
+ON public.inventory_order_consumptions FOR ALL
+USING (restaurant_id = public.get_auth_restaurant_id() OR auth.role() = 'anon');
 
 -- RLS POLICIES FOR FEEDBACK
 CREATE POLICY "Customers can submit feedback"
