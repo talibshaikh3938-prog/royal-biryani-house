@@ -1,5 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, QrCode, ExternalLink, Copy, Check, Smartphone, Sparkles } from 'lucide-react';
+import { getPublicAppUrl, fetchRestaurantTables } from '../lib/supabase';
+import { RestaurantTable } from '../types';
 
 interface TableQrModalProps {
   isOpen: boolean;
@@ -13,21 +15,32 @@ export const TableQrModal: React.FC<TableQrModalProps> = ({
   currentTable,
 }) => {
   const [selectedTable, setSelectedTable] = useState(currentTable || 'Table 4');
+  const [tablesList, setTablesList] = useState<string[]>([]);
   const [copied, setCopied] = useState(false);
 
-  React.useEffect(() => {
+  useEffect(() => {
     if (isOpen) {
       setSelectedTable(currentTable || 'Table 4');
       setCopied(false);
+
+      // Load tables dynamically
+      fetchRestaurantTables().then((tables: RestaurantTable[]) => {
+        if (tables && tables.length > 0) {
+          const numbers = tables.map(t => t.tableNumber);
+          setTablesList(numbers);
+        } else {
+          setTablesList(Array.from({ length: 12 }, (_, i) => `Table ${i + 1}`));
+        }
+      }).catch(() => {
+        setTablesList(Array.from({ length: 12 }, (_, i) => `Table ${i + 1}`));
+      });
     }
   }, [isOpen, currentTable]);
 
   if (!isOpen) return null;
 
-  // Construct URL with table param
-  const currentUrl = typeof window !== 'undefined' ? window.location.origin + window.location.pathname : '';
-  const tableNum = selectedTable.replace(/[^0-9]/g, '') || '4';
-  const qrTargetUrl = `${currentUrl}?table=${tableNum}`;
+  // Construct stable, configurable public URL with table param
+  const qrTargetUrl = getPublicAppUrl(selectedTable);
   
   // Use high-quality QR code image generator service with burgundy styling
   const qrImageSrc = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(qrTargetUrl)}&color=5c1b1b&bgcolor=fdfbf7&margin=2`;
@@ -69,9 +82,9 @@ export const TableQrModal: React.FC<TableQrModalProps> = ({
               onChange={(e) => setSelectedTable(e.target.value)}
               className="bg-white border border-[#e5e1da] text-[#5c1b1b] font-bold text-xs rounded-lg px-2.5 py-1 focus:outline-none focus:border-[#5c1b1b]"
             >
-              {Array.from({ length: 12 }, (_, i) => (
-                <option key={i + 1} value={`Table ${i + 1}`}>
-                  Table {i + 1}
+              {(tablesList.length > 0 ? tablesList : Array.from({ length: 12 }, (_, i) => `Table ${i + 1}`)).map((tbl) => (
+                <option key={tbl} value={tbl}>
+                  {tbl}
                 </option>
               ))}
             </select>
@@ -106,16 +119,28 @@ export const TableQrModal: React.FC<TableQrModalProps> = ({
             Scan this QR code with any smartphone camera to test the seamless contactless ordering experience directly for <strong>{selectedTable}</strong>.
           </p>
 
-          {/* Copy Link Button */}
-          <button
-            onClick={handleCopyLink}
-            className="w-full py-2.5 px-4 rounded-xl bg-white hover:bg-[#f0ede8] text-[#5c1b1b] text-xs font-bold uppercase tracking-wider flex items-center justify-center gap-2 border border-[#e5e1da] transition shadow-2xs"
-          >
-            {copied ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4 text-[#5c1b1b]" />}
-            <span>{copied ? 'Link Copied to Clipboard!' : 'Copy Direct Table URL'}</span>
-          </button>
+          {/* Action Buttons */}
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              onClick={handleCopyLink}
+              className="py-2.5 px-3 rounded-xl bg-white hover:bg-[#f0ede8] text-[#5c1b1b] text-[11px] font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 border border-[#e5e1da] transition shadow-2xs cursor-pointer"
+            >
+              {copied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5 text-[#5c1b1b]" />}
+              <span>{copied ? 'Copied!' : 'Copy URL'}</span>
+            </button>
+            <a
+              href={qrTargetUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="py-2.5 px-3 rounded-xl bg-[#5c1b1b] hover:bg-[#4a1515] text-white text-[11px] font-bold uppercase tracking-wider flex items-center justify-center gap-1.5 transition shadow-2xs cursor-pointer"
+            >
+              <ExternalLink className="w-3.5 h-3.5 text-[#d4af37]" />
+              <span>Open Menu</span>
+            </a>
+          </div>
         </div>
       </div>
     </div>
   );
 };
+

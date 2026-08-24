@@ -102,13 +102,20 @@ export default function App() {
   const [isSupabaseSettingsOpen, setIsSupabaseSettingsOpen] = useState<boolean>(false);
   const [isQrModalOpen, setIsQrModalOpen] = useState<boolean>(false);
 
-  // 1. Initialize table number & view from URL query parameter (e.g. ?table=5, ?view=kitchen)
+  // 1. Initialize table number & view from URL query parameter (e.g. ?table=4, ?view=kitchen)
   useEffect(() => {
     try {
       const params = new URLSearchParams(window.location.search);
       const tableParam = params.get('table');
       if (tableParam) {
-        setTableNumber(tableParam.toLowerCase().startsWith('table') ? tableParam : `Table ${tableParam}`);
+        const cleanTable = decodeURIComponent(tableParam).trim();
+        if (/^\d+$/.test(cleanTable)) {
+          setTableNumber(`Table ${cleanTable}`);
+        } else if (cleanTable.toLowerCase().startsWith('table')) {
+          setTableNumber(cleanTable);
+        } else {
+          setTableNumber(cleanTable);
+        }
       }
 
       const viewParam = params.get('view') || params.get('role');
@@ -309,15 +316,26 @@ export default function App() {
     };
   }, [loadMenu]);
 
-  // Categories list
-  const categories = [
-    'All',
-    'Biryani Specials',
-    'Starters & Tandoor',
-    'Royal Curries',
-    'Breads & Rice',
-    'Beverages & Desserts',
-  ];
+  // Categories list dynamically derived from loaded menu items
+  const categories = useMemo(() => {
+    const itemCats = new Set<string>();
+    menuItems.forEach((item) => {
+      if (item.category && item.category.trim()) {
+        itemCats.add(item.category.trim());
+      }
+    });
+    if (itemCats.size === 0) {
+      return [
+        'All',
+        'Biryani Specials',
+        'Starters & Tandoor',
+        'Royal Curries',
+        'Breads & Rice',
+        'Beverages & Desserts',
+      ];
+    }
+    return ['All', ...Array.from(itemCats)];
+  }, [menuItems]);
 
   // Filtered menu items
   const filteredMenuItems = useMemo(() => {
@@ -333,10 +351,14 @@ export default function App() {
       if (dietaryFilter === 'bestsellers') matchesDietary = Boolean(item.isBestSeller);
 
       // Search query check
+      const query = searchQuery.toLowerCase().trim();
       const matchesSearch =
-        searchQuery.trim() === '' ||
-        item.Name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.Description.toLowerCase().includes(searchQuery.toLowerCase());
+        !query ||
+        item.Name.toLowerCase().includes(query) ||
+        item.Description.toLowerCase().includes(query) ||
+        (item.category && item.category.toLowerCase().includes(query)) ||
+        (item.subcategoryName && item.subcategoryName.toLowerCase().includes(query)) ||
+        (item.sku && item.sku.toLowerCase().includes(query));
 
       return matchesCategory && matchesDietary && matchesSearch;
     });

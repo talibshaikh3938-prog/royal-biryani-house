@@ -23,7 +23,8 @@ import {
   saveRestaurantTable, 
   deleteRestaurantTable,
   getStoredRestaurantTables,
-  getCurrentRestaurantId 
+  getCurrentRestaurantId,
+  getPublicAppUrl 
 } from '../lib/supabase';
 
 export const TableManagementTab: React.FC = () => {
@@ -126,9 +127,7 @@ export const TableManagementTab: React.FC = () => {
   };
 
   const getTableQrUrl = (tableNumber: string) => {
-    const origin = typeof window !== 'undefined' ? window.location.origin + window.location.pathname : '';
-    const cleanNum = tableNumber.replace(/[^0-9a-zA-Z]/g, '') || '1';
-    return `${origin}?table=${cleanNum}`;
+    return getPublicAppUrl(tableNumber);
   };
 
   return (

@@ -1,5 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, MapPin, Check, QrCode, Sparkles } from 'lucide-react';
+import { fetchRestaurantTables } from '../lib/supabase';
+import { RestaurantTable } from '../types';
 
 interface TableSelectorModalProps {
   isOpen: boolean;
@@ -15,9 +17,23 @@ export const TableSelectorModal: React.FC<TableSelectorModalProps> = ({
   onSelectTable,
 }) => {
   const [customInput, setCustomInput] = useState('');
+  const [configuredTables, setConfiguredTables] = useState<RestaurantTable[]>([]);
+
+  useEffect(() => {
+    if (isOpen) {
+      fetchRestaurantTables().then(tbls => {
+        if (tbls && tbls.length > 0) {
+          setConfiguredTables(tbls.filter(t => t.isActive));
+        }
+      }).catch(() => {});
+    }
+  }, [isOpen]);
 
   if (!isOpen) return null;
-  const tables = Array.from({ length: 16 }, (_, i) => `Table ${i + 1}`);
+
+  const displayTableList = configuredTables.length > 0
+    ? configuredTables.map(t => t.tableNumber)
+    : Array.from({ length: 12 }, (_, i) => `Table ${i + 1}`);
 
   const handleSelect = (tbl: string) => {
     onSelectTable(tbl);
@@ -66,7 +82,7 @@ export const TableSelectorModal: React.FC<TableSelectorModalProps> = ({
             Available Tables
           </label>
           <div className="grid grid-cols-4 gap-2">
-            {tables.map((t) => {
+            {displayTableList.map((t) => {
               const isSelected = currentTable === t;
               return (
                 <button
