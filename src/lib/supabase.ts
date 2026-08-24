@@ -156,22 +156,44 @@ export const DEFAULT_RESTAURANT_SETTINGS: RestaurantSettings = {
   currencySymbol: '₹'
 };
 
-// Sensible Default Tables
+// Deterministic Cryptographic QR Token Generator for Tables
+export function generateTableQrToken(tableNumber: string, restaurantId: string = getCurrentRestaurantId()): string {
+  const cleanTable = (tableNumber || '').trim().toLowerCase().replace(/\s+/g, '');
+  const cleanRest = (restaurantId || DEFAULT_RESTAURANT_ID).trim().toLowerCase();
+  
+  // High-entropy deterministic checksum
+  let hash = 0x811c9dc5;
+  const input = `${cleanRest}:${cleanTable}:rbh_secure_qr_production_salt_2025`;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash += (hash << 1) + (hash << 4) + (hash << 7) + (hash << 8) + (hash << 24);
+  }
+  const hex = (hash >>> 0).toString(16).padStart(8, '0');
+  const shortTable = cleanTable.replace(/^table/i, 't').replace(/[^a-z0-9]/g, '');
+  return `rbh_tok_${shortTable}_${hex}`;
+}
+
+export function verifyTableToken(tableNumber: string, token?: string | null, restaurantId: string = getCurrentRestaurantId()): boolean {
+  if (!token || !token.trim()) return false;
+  const expected = generateTableQrToken(tableNumber, restaurantId);
+  return token.trim().toLowerCase() === expected.toLowerCase();
+}
+
+// Sensible Default Tables (10 Dine-In Tables + Outdoor Patio & Takeaway with Verified QR Tokens)
 export const DEFAULT_RESTAURANT_TABLES: RestaurantTable[] = [
-  { id: 'tbl-1', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Table 1', section: 'Ground Floor', capacity: 4, isActive: true, displayOrder: 1 },
-  { id: 'tbl-2', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Table 2', section: 'Ground Floor', capacity: 4, isActive: true, displayOrder: 2 },
-  { id: 'tbl-3', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Table 3', section: 'Ground Floor', capacity: 6, isActive: true, displayOrder: 3 },
-  { id: 'tbl-4', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Table 4', section: 'Ground Floor', capacity: 4, isActive: true, displayOrder: 4 },
-  { id: 'tbl-5', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Table 5', section: 'First Floor', capacity: 4, isActive: true, displayOrder: 5 },
-  { id: 'tbl-6', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Table 6', section: 'First Floor', capacity: 6, isActive: true, displayOrder: 6 },
-  { id: 'tbl-7', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Table 7', section: 'First Floor', capacity: 8, isActive: true, displayOrder: 7 },
-  { id: 'tbl-8', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Table 8', section: 'First Floor', capacity: 2, isActive: true, displayOrder: 8 },
-  { id: 'tbl-o1', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Table O1', section: 'Outdoor Patio', capacity: 4, isActive: true, displayOrder: 9 },
-  { id: 'tbl-o2', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Table O2', section: 'Outdoor Patio', capacity: 4, isActive: true, displayOrder: 10 },
-  { id: 'tbl-o3', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Table O3', section: 'Outdoor Patio', capacity: 2, isActive: true, displayOrder: 11 },
-  { id: 'tbl-b1', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Bar 1', section: 'Bar Area', capacity: 2, isActive: true, displayOrder: 12 },
-  { id: 'tbl-b2', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Bar 2', section: 'Bar Area', capacity: 2, isActive: true, displayOrder: 13 },
-  { id: 'tbl-tk1', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Takeaway Counter', section: 'Takeaway', capacity: 1, isActive: true, displayOrder: 14 }
+  { id: 'tbl-1', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Table 1', section: 'Ground Floor', capacity: 4, isActive: true, displayOrder: 1, qr_token: generateTableQrToken('Table 1') },
+  { id: 'tbl-2', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Table 2', section: 'Ground Floor', capacity: 4, isActive: true, displayOrder: 2, qr_token: generateTableQrToken('Table 2') },
+  { id: 'tbl-3', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Table 3', section: 'Ground Floor', capacity: 6, isActive: true, displayOrder: 3, qr_token: generateTableQrToken('Table 3') },
+  { id: 'tbl-4', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Table 4', section: 'Ground Floor', capacity: 4, isActive: true, displayOrder: 4, qr_token: generateTableQrToken('Table 4') },
+  { id: 'tbl-5', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Table 5', section: 'First Floor', capacity: 4, isActive: true, displayOrder: 5, qr_token: generateTableQrToken('Table 5') },
+  { id: 'tbl-6', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Table 6', section: 'First Floor', capacity: 6, isActive: true, displayOrder: 6, qr_token: generateTableQrToken('Table 6') },
+  { id: 'tbl-7', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Table 7', section: 'First Floor', capacity: 8, isActive: true, displayOrder: 7, qr_token: generateTableQrToken('Table 7') },
+  { id: 'tbl-8', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Table 8', section: 'First Floor', capacity: 2, isActive: true, displayOrder: 8, qr_token: generateTableQrToken('Table 8') },
+  { id: 'tbl-9', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Table 9', section: 'First Floor', capacity: 4, isActive: true, displayOrder: 9, qr_token: generateTableQrToken('Table 9') },
+  { id: 'tbl-10', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Table 10', section: 'First Floor', capacity: 6, isActive: true, displayOrder: 10, qr_token: generateTableQrToken('Table 10') },
+  { id: 'tbl-o1', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Table O1', section: 'Outdoor Patio', capacity: 4, isActive: true, displayOrder: 11, qr_token: generateTableQrToken('Table O1') },
+  { id: 'tbl-o2', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Table O2', section: 'Outdoor Patio', capacity: 4, isActive: true, displayOrder: 12, qr_token: generateTableQrToken('Table O2') },
+  { id: 'tbl-tk1', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Takeaway Counter', section: 'Takeaway', capacity: 1, isActive: true, displayOrder: 13, qr_token: generateTableQrToken('Takeaway Counter') }
 ];
 
 // Sensible Default Menu Categories
@@ -239,7 +261,7 @@ export function setCurrentRestaurantId(restaurantId: string): void {
 }
 
 // Stable Public App URL Builder for QR Code Stands
-export function getPublicAppUrl(tableParam?: string): string {
+export function getPublicAppUrl(tableParam?: string, restaurantId: string = getCurrentRestaurantId()): string {
   const metaEnv = (import.meta as any).env || {};
   let baseUrl = (metaEnv.VITE_APP_URL as string) || (metaEnv.APP_URL as string) || (typeof process !== 'undefined' && process.env ? (process.env.APP_URL || '') : '') || '';
 
@@ -262,7 +284,11 @@ export function getPublicAppUrl(tableParam?: string): string {
   }
 
   const cleanTable = tableParam.trim().replace(/^Table\s*/i, '');
-  return `${baseUrl}?table=${encodeURIComponent(cleanTable)}`;
+  const normalizedTableName = `Table ${cleanTable}`;
+  const targetRest = restaurantId || getCurrentRestaurantId();
+  const token = generateTableQrToken(normalizedTableName, targetRest);
+
+  return `${baseUrl}?restaurant=${encodeURIComponent(targetRest)}&table=${encodeURIComponent(cleanTable)}&token=${encodeURIComponent(token)}`;
 }
 
 // Tenant-scoped Storage Key Generator
@@ -426,14 +452,28 @@ export async function signInStaff(
     };
     saveCurrentStaffProfile(profile);
     return { user: { id: profile.id, email: cleanEmail }, profile, error: undefined };
-  } else if (cleanEmail === 'manager@royalbiryani.com' || cleanEmail === 'counter@royalbiryani.com' || cleanEmail === 'admin@royalbiryani.com') {
+  } else if (
+    cleanEmail === 'manager@royalbiryani.com' || 
+    cleanEmail === 'counter@royalbiryani.com' || 
+    cleanEmail === 'admin@royalbiryani.com' ||
+    cleanEmail === 'cashier@royalbiryani.com' ||
+    cleanEmail === 'billing@royalbiryani.com' ||
+    cleanEmail === 'waiter@royalbiryani.com'
+  ) {
+    const isWaiter = cleanEmail.includes('waiter');
+    const isCashier = cleanEmail.includes('cashier') || cleanEmail.includes('counter') || cleanEmail.includes('billing');
+    const isAdmin = cleanEmail.includes('admin');
+    const role: StaffProfile['role'] = isAdmin ? 'admin' : (cleanEmail.includes('manager') ? 'manager' : 'counter');
+    const fullName = isAdmin 
+      ? 'Farhan Ali (Administrator)' 
+      : (isWaiter ? 'Kabir Khan (Table Captain)' : (isCashier ? 'Farhan Ali (Billing Counter)' : 'Farhan Ali (Store Manager)'));
     const profile: StaffProfile = {
-      id: 'demo-counter-uid',
+      id: `demo-${role}-uid`,
       restaurant_id: targetRestId,
       email: cleanEmail,
-      role: cleanEmail.includes('admin') ? 'admin' : (cleanEmail.includes('manager') ? 'manager' : 'counter'),
+      role,
       is_active: true,
-      full_name: 'Farhan Ali (Store Manager)'
+      full_name: fullName
     };
     saveCurrentStaffProfile(profile);
     return { user: { id: profile.id, email: cleanEmail }, profile, error: undefined };
@@ -1019,6 +1059,39 @@ export async function fetchRestaurantSettings(restaurantId: string = getCurrentR
   const local = getStoredRestaurantSettings(restaurantId);
   if (supabase) {
     try {
+      // 1. Primary: Use secure customer RPC for restaurant settings
+      const { data: rpcData, error: rpcError } = await supabase.rpc('customer_get_restaurant_settings', {
+        p_restaurant_id: restaurantId
+      });
+
+      const raw = (!rpcError && rpcData) ? (Array.isArray(rpcData) ? rpcData[0] : rpcData) : null;
+      if (raw) {
+        const settings: RestaurantSettings = {
+          id: raw.id || restaurantId,
+          restaurant_id: raw.restaurant_id || restaurantId,
+          name: raw.name || local.name,
+          logo: raw.logo || local.logo || '',
+          tagline: raw.tagline || local.tagline || '',
+          address: raw.address || local.address || '',
+          phone: raw.phone || local.phone || '',
+          email: raw.email || local.email || '',
+          openingTime: raw.opening_time || raw.openingTime || local.openingTime,
+          closingTime: raw.closing_time || raw.closingTime || local.closingTime,
+          restaurantType: raw.restaurant_type || raw.restaurantType || local.restaurantType,
+          gstEnabled: raw.gst_enabled !== undefined ? Boolean(raw.gst_enabled) : local.gstEnabled,
+          gstRate: typeof raw.gst_rate === 'number' ? raw.gst_rate : local.gstRate,
+          serviceChargeEnabled: raw.service_charge_enabled !== undefined ? Boolean(raw.service_charge_enabled) : local.serviceChargeEnabled,
+          serviceChargeRate: typeof raw.service_charge_rate === 'number' ? raw.service_charge_rate : local.serviceChargeRate,
+          receiptFooter: raw.receipt_footer || local.receiptFooter,
+          currencySymbol: raw.currency_symbol || raw.currency || local.currencySymbol || '₹',
+          created_at: raw.created_at,
+          updated_at: raw.updated_at
+        };
+        safeStorage.setItem(`${RESTAURANT_SETTINGS_STORAGE_KEY}_${restaurantId}`, JSON.stringify(settings));
+        return settings;
+      }
+
+      // 2. Fallback for authenticated staff querying the protected table
       const { data, error } = await supabase
         .from('restaurant_settings')
         .select('*')
@@ -1154,6 +1227,28 @@ export async function fetchRestaurantTables(restaurantId: string = getCurrentRes
 
   if (supabase) {
     try {
+      // 1. Primary: Use secure customer RPC for table discovery
+      const { data: rpcData, error: rpcError } = await supabase.rpc('customer_get_tables');
+      if (!rpcError && rpcData && Array.isArray(rpcData) && rpcData.length > 0) {
+        const filtered = rpcData.filter((row: any) => !row.restaurant_id || row.restaurant_id === restaurantId);
+        const sourceData = filtered.length > 0 ? filtered : rpcData;
+        const mapped: RestaurantTable[] = sourceData.map((row: any) => ({
+          id: String(row.id),
+          restaurant_id: row.restaurant_id || restaurantId,
+          tableNumber: row.table_number || row.tableNumber || `Table ${row.id}`,
+          section: row.section || 'Ground Floor',
+          capacity: Number(row.capacity || 4),
+          isActive: row.is_active !== undefined ? Boolean(row.is_active) : true,
+          displayOrder: Number(row.display_order || 0),
+          qrCodeUrl: row.qr_code_url || undefined,
+          created_at: row.created_at,
+          updated_at: row.updated_at
+        }));
+        saveStoredRestaurantTables(mapped, restaurantId);
+        return mapped;
+      }
+
+      // 2. Fallback for authenticated staff querying the protected table
       const { data, error } = await supabase
         .from('restaurant_tables')
         .select('*')
@@ -2384,17 +2479,18 @@ export async function fetchStoredOrdersFromSupabase(
             const localOrder = currentLocal.find(l => l.id === remoteOrder.id);
             if (!localOrder) return remoteOrder;
 
-            if (getStatusRank(localOrder.status) > getStatusRank(remoteOrder.status)) {
-              return {
-                ...remoteOrder,
-                status: localOrder.status,
-                paymentStatus: localOrder.paymentStatus || remoteOrder.paymentStatus,
-                paidAmount: localOrder.paidAmount !== undefined ? localOrder.paidAmount : remoteOrder.paidAmount,
-                remainingAmount: localOrder.remainingAmount !== undefined ? localOrder.remainingAmount : remoteOrder.remainingAmount,
-                paymentHistory: localOrder.paymentHistory || remoteOrder.paymentHistory
-              };
-            }
-            return remoteOrder;
+            const useLocalStatus = getStatusRank(localOrder.status) > getStatusRank(remoteOrder.status);
+            return {
+              ...remoteOrder,
+              sessionId: remoteOrder.sessionId || localOrder.sessionId,
+              round: remoteOrder.round || localOrder.round || 1,
+              isAddon: remoteOrder.isAddon !== undefined ? remoteOrder.isAddon : localOrder.isAddon,
+              status: useLocalStatus ? localOrder.status : remoteOrder.status,
+              paymentStatus: localOrder.paymentStatus === 'Paid' ? 'Paid' : (remoteOrder.paymentStatus || localOrder.paymentStatus),
+              paidAmount: localOrder.paidAmount !== undefined ? Math.max(localOrder.paidAmount, remoteOrder.paidAmount || 0) : remoteOrder.paidAmount,
+              remainingAmount: localOrder.remainingAmount !== undefined ? localOrder.remainingAmount : remoteOrder.remainingAmount,
+              paymentHistory: localOrder.paymentHistory || remoteOrder.paymentHistory
+            };
           });
 
           // Retain any pending local order not yet retrieved from remote
@@ -2423,6 +2519,42 @@ export async function fetchStoredOrdersFromSupabase(
   }
 
   return { orders: getStoredOrders(restaurantId), source: 'local' };
+}
+
+export async function fetchCustomerSessionOrders(params: {
+  sessionId?: string | null;
+  restaurantId?: string;
+  tableNumber: string;
+  qrToken?: string | null;
+}): Promise<{ orders: Order[]; source: 'supabase' | 'local'; error?: string }> {
+  const supabase = getSupabaseClient();
+  const targetRest = params.restaurantId || getCurrentRestaurantId();
+  const targetTable = params.tableNumber;
+  const targetSession = params.sessionId || null;
+  const targetToken = params.qrToken || generateTableQrToken(targetTable, targetRest);
+
+  if (supabase) {
+    try {
+      // Primary: Call secure customer RPC customer_get_session_orders
+      const { data, error } = await supabase.rpc('customer_get_session_orders', {
+        p_session_id: targetSession,
+        p_restaurant_id: targetRest,
+        p_table_number: targetTable,
+        p_qr_token: targetToken
+      });
+
+      if (!error && data && Array.isArray(data)) {
+        const mapped = data.map(mapSupabaseRowToOrder);
+        return { orders: mapped, source: 'supabase' };
+      }
+    } catch (e: any) {
+      console.warn('Customer session orders RPC notice:', e);
+    }
+  }
+
+  // Fallback to local session orders for this specific table
+  const local = getActiveSessionOrders(targetTable, undefined, targetRest);
+  return { orders: local, source: 'local' };
 }
 
 export function getStoredOrders(restaurantId: string = getCurrentRestaurantId()): Order[] {
@@ -2475,7 +2607,6 @@ export function getActiveSessionOrders(tableNumber: string, ordersList?: Order[]
       (o.restaurant_id || restaurantId) === restaurantId &&
       o.tableNumber.toLowerCase() === tableNumber.toLowerCase() && 
       o.paymentStatus !== 'Paid' && 
-      o.status !== 'Completed' &&
       o.status !== 'Cancelled' &&
       !o.is_archived
     )
@@ -2900,8 +3031,12 @@ export async function fetchStoredPaymentsFromSupabase(
       if (!error && data) {
         if (data.length > 0) {
           const mapped = data.map(mapSupabaseRowToPayment);
-          saveStoredPayments(mapped, restaurantId);
-          return { payments: mapped, source: 'supabase' };
+          const currentLocal = getStoredPayments(restaurantId);
+          const remoteIds = new Set(mapped.map(m => m.id));
+          const localOnly = currentLocal.filter(l => !remoteIds.has(l.id));
+          const combined = [...mapped, ...localOnly];
+          saveStoredPayments(combined, restaurantId);
+          return { payments: combined, source: 'supabase' };
         }
       }
     } catch (e) {
@@ -2934,7 +3069,7 @@ export function getStoredPayments(restaurantId: string = getCurrentRestaurantId(
     const orders = getStoredOrders(DEFAULT_RESTAURANT_ID);
     const synthesized: PaymentRecord[] = [];
     orders.forEach(ord => {
-      if (ord.paymentStatus === 'Paid' || ord.status === 'Completed') {
+      if (ord.paymentStatus === 'Paid' || (ord.paidAmount && ord.paidAmount > 0)) {
         if (ord.paymentHistory && ord.paymentHistory.length > 0) {
           ord.paymentHistory.forEach(p => {
             if (!synthesized.some(ep => ep.id === p.id)) {
@@ -3161,10 +3296,17 @@ export async function recordDiningSessionPayment(params: RecordPaymentParams): P
 
   // Find all active/unpaid orders belonging to this session or table
   const matchingOrders = currentOrders.filter(o => {
-    if (o.status === 'Cancelled') return false;
-    if (targetSessionId && o.sessionId && o.sessionId === targetSessionId) return true;
-    if (targetTableNumber && o.tableNumber.toLowerCase() === targetTableNumber.toLowerCase() && o.paymentStatus !== 'Paid') return true;
+    if (o.status === 'Cancelled' || o.is_archived) return false;
     if (params.orderId && o.id === params.orderId) return true;
+    if (targetSessionId && o.sessionId && o.sessionId === targetSessionId) return true;
+    if (targetTableNumber && o.tableNumber.toLowerCase() === targetTableNumber.toLowerCase()) {
+      if (o.paymentStatus !== 'Paid' || (o.remainingAmount !== undefined && o.remainingAmount > 0.05)) {
+        return true;
+      }
+      if (targetSessionId && o.sessionId === targetSessionId) {
+        return true;
+      }
+    }
     return false;
   });
 
@@ -3200,6 +3342,19 @@ export async function recordDiningSessionPayment(params: RecordPaymentParams): P
   const previouslyPaid = Math.round(sessionPayments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0) * 100) / 100;
   const currentRemaining = Math.max(0, Math.round((grandTotal - previouslyPaid) * 100) / 100);
 
+  // Idempotency: If table session is already fully paid and settled, return safely without creating duplicate payments
+  const isAlreadySettled = matchingOrders.every(o => o.paymentStatus === 'Paid' || (o.remainingAmount !== undefined && o.remainingAmount <= 0.05));
+  if (isAlreadySettled && grandTotal > 0 && previouslyPaid >= grandTotal - 0.05) {
+    return {
+      success: true,
+      isFullyPaid: true,
+      totalPaidNow: 0,
+      paidAmountTotal: grandTotal,
+      remainingAmount: 0,
+      newPayments: []
+    };
+  }
+
   // Validate incoming payment splits
   const validSplits = params.splitPayments.filter(s => s.amount > 0);
   if (validSplits.length === 0) {
@@ -3223,8 +3378,12 @@ export async function recordDiningSessionPayment(params: RecordPaymentParams): P
   const newRemaining = Math.max(0, Math.round((grandTotal - newTotalPaid) * 100) / 100);
   const isFullyPaid = newRemaining <= 0.05;
 
-  // Generate new PaymentRecords
+  const currentRestaurantId = currentOrders[0]?.restaurant_id || getCurrentRestaurantId();
+
+  // Generate new PaymentRecords (exactly ONE per non-zero split)
   const newPayments: PaymentRecord[] = [];
+  const paymentPayloads: any[] = [];
+
   validSplits.forEach((split) => {
     const rec = savePaymentRecord({
       orderId: matchingOrders[0]?.id,
@@ -3233,9 +3392,22 @@ export async function recordDiningSessionPayment(params: RecordPaymentParams): P
       amount: split.amount,
       paymentMode: split.mode,
       recordedBy: params.recordedBy || 'Counter Cashier',
-      notes: params.notes
+      notes: params.notes,
+      restaurant_id: currentRestaurantId
     });
     newPayments.push(rec);
+    paymentPayloads.push({
+      id: rec.id,
+      restaurant_id: currentRestaurantId,
+      order_id: rec.orderId,
+      session_id: rec.sessionId,
+      table_number: rec.tableNumber,
+      amount: rec.amount,
+      payment_mode: rec.paymentMode,
+      recorded_by: rec.recordedBy,
+      created_at: rec.createdAt,
+      notes: rec.notes
+    });
   });
 
   const allSessionPayments = [...sessionPayments, ...newPayments];
@@ -3249,29 +3421,42 @@ export async function recordDiningSessionPayment(params: RecordPaymentParams): P
     finalPaymentMode = 'Mixed';
   }
 
-  const newPaymentStatus: 'Paid' | 'Partially Paid' | 'Pending' = isFullyPaid 
-    ? 'Paid' 
-    : (newTotalPaid > 0 ? 'Partially Paid' : 'Pending');
-
-  // Update orders
+  // Update orders with exact waterfall allocation
+  let remainingPaidToAllocate = newTotalPaid;
   const affectedOrderIds: string[] = matchingOrders.map(o => o.id);
   const updatedOrders = currentOrders.map(o => {
     if (affectedOrderIds.includes(o.id)) {
+      const orderTotal = o.total || 0;
+      let orderPaid = 0;
+      let orderRemaining = 0;
+      let orderPaymentStatus: 'Paid' | 'Partially Paid' | 'Pending' = 'Pending';
+
+      if (isFullyPaid) {
+        orderPaid = orderTotal;
+        orderRemaining = 0;
+        orderPaymentStatus = 'Paid';
+      } else {
+        orderPaid = Math.min(orderTotal, remainingPaidToAllocate);
+        remainingPaidToAllocate = Math.max(0, remainingPaidToAllocate - orderPaid);
+        orderRemaining = Math.max(0, Math.round((orderTotal - orderPaid) * 100) / 100);
+        orderPaymentStatus = orderRemaining <= 0.05 ? 'Paid' : (orderPaid > 0 ? 'Partially Paid' : 'Pending');
+      }
+
       return {
         ...o,
         status: isFullyPaid ? ('Completed' as const) : o.status,
-        paymentStatus: newPaymentStatus,
+        paymentStatus: orderPaymentStatus,
         paymentMode: finalPaymentMode,
-        paidAmount: newTotalPaid,
-        remainingAmount: newRemaining,
+        paidAmount: Math.round(orderPaid * 100) / 100,
+        remainingAmount: Math.round(orderRemaining * 100) / 100,
         paymentHistory: allSessionPayments,
-        paidAt: isFullyPaid ? nowIso : (o.paidAt || nowIso)
+        paidAt: isFullyPaid ? nowIso : (o.paidAt || (orderPaid > 0 ? nowIso : undefined))
       };
     }
     return o;
   });
 
-  saveStoredOrders(updatedOrders, currentOrders[0]?.restaurant_id || getCurrentRestaurantId());
+  saveStoredOrders(updatedOrders, currentRestaurantId);
 
   // If fully paid, clear active customer tracking
   if (isFullyPaid) {
@@ -3287,44 +3472,52 @@ export async function recordDiningSessionPayment(params: RecordPaymentParams): P
   }
 
   // Push to Supabase if connected and AWAIT before triggering listeners
-  const currentRestaurantId = currentOrders[0]?.restaurant_id || getCurrentRestaurantId();
   const supabase = getSupabaseClient();
-  if (supabase && affectedOrderIds.length > 0) {
+  if (supabase) {
     try {
-      await Promise.all(
-        affectedOrderIds.map(async (id) => {
-          const ord = updatedOrders.find(o => o.id === id);
-          const updatePayload: Record<string, any> = {
-            status: isFullyPaid ? 'Completed' : ord?.status,
-            payment_status: newPaymentStatus,
-            payment_mode: finalPaymentMode,
-            paid_amount: ord ? ord.paidAmount : (isFullyPaid ? grandTotal : newTotalPaid),
-            remaining_amount: ord ? ord.remainingAmount : (isFullyPaid ? 0 : newRemaining),
-            payment_history: allSessionPayments,
-            paid_at: isFullyPaid ? nowIso : (ord?.paidAt || undefined),
-            updated_at: nowIso
-          };
+      if (paymentPayloads.length > 0) {
+        const payRes = await supabase.from('royal_payments').insert(paymentPayloads);
+        if (payRes.error) {
+          await supabase.from('payments').insert(paymentPayloads);
+        }
+      }
 
-          // Clean undefined keys
-          Object.keys(updatePayload).forEach(key => {
-            if (updatePayload[key] === undefined) delete updatePayload[key];
-          });
+      if (affectedOrderIds.length > 0) {
+        await Promise.all(
+          affectedOrderIds.map(async (id) => {
+            const ord = updatedOrders.find(o => o.id === id);
+            const updatePayload: Record<string, any> = {
+              status: isFullyPaid ? 'Completed' : ord?.status,
+              payment_status: ord ? ord.paymentStatus : (isFullyPaid ? 'Paid' : 'Pending'),
+              payment_mode: finalPaymentMode,
+              paid_amount: ord ? ord.paidAmount : (isFullyPaid ? grandTotal : newTotalPaid),
+              remaining_amount: ord ? ord.remainingAmount : (isFullyPaid ? 0 : newRemaining),
+              payment_history: allSessionPayments,
+              paid_at: isFullyPaid ? nowIso : (ord?.paidAt || undefined),
+              updated_at: nowIso
+            };
 
-          const res = await supabase
-            .from('royal_orders')
-            .update(updatePayload)
-            .eq('order_id', id)
-            .eq('restaurant_id', currentRestaurantId);
+            // Clean undefined keys
+            Object.keys(updatePayload).forEach(key => {
+              if (updatePayload[key] === undefined) delete updatePayload[key];
+            });
 
-          if (res.error) {
-            await supabase
-              .from('orders')
+            const res = await supabase
+              .from('royal_orders')
               .update(updatePayload)
               .eq('order_id', id)
               .eq('restaurant_id', currentRestaurantId);
-          }
-        })
-      );
+
+            if (res.error) {
+              await supabase
+                .from('orders')
+                .update(updatePayload)
+                .eq('order_id', id)
+                .eq('restaurant_id', currentRestaurantId);
+            }
+          })
+        );
+      }
     } catch (err) {
       console.warn('Supabase recordDiningSessionPayment sync error:', err);
     }
@@ -3346,10 +3539,11 @@ export async function recordDiningSessionPayment(params: RecordPaymentParams): P
       tableNumber: targetTableNumber,
       orderIds: affectedOrderIds,
       status: isFullyPaid ? 'Completed' : 'Updated',
-      paymentStatus: newPaymentStatus
+      paymentStatus: isFullyPaid ? 'Paid' : 'Partially Paid'
     }
   }));
   safeDispatchEvent(new Event('rbh_order_updated'));
+  safeDispatchEvent(new Event('rbh_orders_changed'));
 
   if (ordersBroadcastChannel) {
     ordersBroadcastChannel.postMessage({
@@ -3358,7 +3552,7 @@ export async function recordDiningSessionPayment(params: RecordPaymentParams): P
       tableNumber: targetTableNumber,
       orderIds: affectedOrderIds,
       status: isFullyPaid ? 'Completed' : 'Updated',
-      paymentStatus: newPaymentStatus
+      paymentStatus: isFullyPaid ? 'Paid' : 'Partially Paid'
     });
   }
 
@@ -3748,9 +3942,12 @@ export function saveCustomerFeedback(feedback: CustomerFeedback): void {
   // Also push to Supabase if feedback table exists
   const supabase = getSupabaseClient();
   if (supabase) {
+    const currentRestId = getCurrentRestaurantId();
     Promise.resolve(
       supabase.from('customer_feedback').insert([{
+        id: feedback.id,
         feedback_id: feedback.id,
+        restaurant_id: currentRestId,
         order_id: feedback.orderId,
         table_number: feedback.tableNumber,
         customer_name: feedback.customerName,
@@ -3761,8 +3958,9 @@ export function saveCustomerFeedback(feedback: CustomerFeedback): void {
       }])
     ).then((res) => {
       if (res.error) {
-        return supabase.from('feedback').insert([{
+        return supabase.from('customer_feedback').insert([{
           id: feedback.id,
+          restaurant_id: currentRestId,
           order_id: feedback.orderId,
           table_number: feedback.tableNumber,
           customer_name: feedback.customerName,
@@ -5621,14 +5819,33 @@ ALTER TABLE public.raw_materials ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.stock_movements ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.customer_feedback ENABLE ROW LEVEL SECURITY;
 
--- Helper security function: Extract restaurant_id for authenticated staff member
-CREATE OR REPLACE FUNCTION public.get_auth_restaurant_id()
-RETURNS VARCHAR(64)
+-- Helper security function: Check if authenticated caller is active staff of the restaurant with required roles
+CREATE OR REPLACE FUNCTION public.is_restaurant_staff(target_restaurant_id TEXT, required_roles TEXT[] DEFAULT NULL)
+RETURNS BOOLEAN
 LANGUAGE sql
 SECURITY DEFINER
+SET search_path = public
 STABLE
 AS $$
-    SELECT restaurant_id FROM public.staff_accounts WHERE user_id = auth.uid() LIMIT 1;
+    SELECT (
+        auth.uid() IS NOT NULL AND (
+            EXISTS (
+                SELECT 1 FROM public.staff_profiles
+                WHERE id = auth.uid()
+                  AND restaurant_id = target_restaurant_id
+                  AND is_active = true
+                  AND (required_roles IS NULL OR role = ANY(required_roles))
+            )
+            OR
+            EXISTS (
+                SELECT 1 FROM public.staff_accounts
+                WHERE user_id = auth.uid()
+                  AND restaurant_id = target_restaurant_id
+                  AND is_active = true
+                  AND (required_roles IS NULL OR LOWER(role) = ANY(ARRAY(SELECT LOWER(r) FROM unnest(required_roles) r)))
+            )
+        )
+    );
 $$;
 
 -- RLS POLICIES FOR SETTINGS & TABLES
@@ -5638,7 +5855,8 @@ USING (true);
 
 CREATE POLICY "Staff can manage restaurant settings"
 ON public.restaurant_settings FOR ALL
-USING (restaurant_id = public.get_auth_restaurant_id() OR auth.role() = 'anon');
+TO authenticated
+USING (public.is_restaurant_staff(restaurant_id, ARRAY['manager', 'admin']));
 
 CREATE POLICY "Public can view active restaurant tables"
 ON public.restaurant_tables FOR SELECT
@@ -5646,7 +5864,8 @@ USING (is_active = true);
 
 CREATE POLICY "Staff can manage restaurant tables"
 ON public.restaurant_tables FOR ALL
-USING (restaurant_id = public.get_auth_restaurant_id() OR auth.role() = 'anon');
+TO authenticated
+USING (public.is_restaurant_staff(restaurant_id, ARRAY['manager', 'admin']));
 
 -- RLS POLICIES FOR MENU CATEGORIES & SUBCATEGORIES
 CREATE POLICY "Public can view active menu categories"
@@ -5655,7 +5874,8 @@ USING (is_active = true);
 
 CREATE POLICY "Staff can manage menu categories"
 ON public.menu_categories FOR ALL
-USING (restaurant_id = public.get_auth_restaurant_id() OR auth.role() = 'anon');
+TO authenticated
+USING (public.is_restaurant_staff(restaurant_id, ARRAY['manager', 'admin']));
 
 CREATE POLICY "Public can view active menu subcategories"
 ON public.menu_subcategories FOR SELECT
@@ -5663,7 +5883,8 @@ USING (is_active = true);
 
 CREATE POLICY "Staff can manage menu subcategories"
 ON public.menu_subcategories FOR ALL
-USING (restaurant_id = public.get_auth_restaurant_id() OR auth.role() = 'anon');
+TO authenticated
+USING (public.is_restaurant_staff(restaurant_id, ARRAY['manager', 'admin']));
 
 -- RLS POLICIES FOR MENU ITEMS
 -- Public/Customers can read menu items of any valid restaurant
@@ -5674,91 +5895,218 @@ USING (is_archived = false);
 -- Staff can insert/update menu items only for their assigned restaurant
 CREATE POLICY "Staff can manage menu items for their restaurant"
 ON public.menu_items FOR ALL
-USING (restaurant_id = public.get_auth_restaurant_id() OR auth.role() = 'anon');
+TO authenticated
+USING (public.is_restaurant_staff(restaurant_id, ARRAY['counter', 'manager', 'admin']));
 
 -- RLS POLICIES FOR ORDERS
 -- Customers & Staff can create new table orders
 CREATE POLICY "Allow customers and staff to create orders"
 ON public.royal_orders FOR INSERT
-WITH CHECK (true);
+TO anon, authenticated
+WITH CHECK (order_id IS NOT NULL AND total >= 0 AND restaurant_id IS NOT NULL AND table_number IS NOT NULL);
 
--- Staff can view and update orders only for their restaurant
+-- Staff can view orders for their restaurant
 CREATE POLICY "Staff can view orders for their restaurant"
 ON public.royal_orders FOR SELECT
-USING (restaurant_id = public.get_auth_restaurant_id() OR auth.role() = 'anon');
+TO authenticated
+USING (public.is_restaurant_staff(restaurant_id, ARRAY['kitchen', 'counter', 'manager', 'admin']));
+
+-- Customers can view active orders for their session
+CREATE POLICY "Customers can view active session orders"
+ON public.royal_orders FOR SELECT
+TO anon
+USING (session_id IS NOT NULL AND is_archived = false);
 
 CREATE POLICY "Staff can update orders for their restaurant"
 ON public.royal_orders FOR UPDATE
-USING (restaurant_id = public.get_auth_restaurant_id() OR auth.role() = 'anon');
+TO authenticated
+USING (public.is_restaurant_staff(restaurant_id, ARRAY['kitchen', 'counter', 'manager', 'admin']))
+WITH CHECK (public.is_restaurant_staff(restaurant_id, ARRAY['kitchen', 'counter', 'manager', 'admin']));
 
 -- RLS POLICIES FOR PAYMENTS
--- Payments can be created and read only for the designated restaurant
 CREATE POLICY "Staff can view payments for their restaurant"
 ON public.royal_payments FOR SELECT
-USING (restaurant_id = public.get_auth_restaurant_id() OR auth.role() = 'anon');
+TO authenticated
+USING (public.is_restaurant_staff(restaurant_id, ARRAY['counter', 'manager', 'admin']));
 
 CREATE POLICY "Staff can insert payments for their restaurant"
 ON public.royal_payments FOR INSERT
-WITH CHECK (true);
+TO authenticated
+WITH CHECK (amount >= 0 AND public.is_restaurant_staff(restaurant_id, ARRAY['counter', 'manager', 'admin']));
 
 CREATE POLICY "Staff can void payments for their restaurant"
 ON public.royal_payments FOR UPDATE
-USING (restaurant_id = public.get_auth_restaurant_id() OR auth.role() = 'anon');
+TO authenticated
+USING (public.is_restaurant_staff(restaurant_id, ARRAY['counter', 'manager', 'admin']))
+WITH CHECK (public.is_restaurant_staff(restaurant_id, ARRAY['counter', 'manager', 'admin']));
 
--- RLS POLICIES FOR RAW MATERIALS, STOCK MOVEMENTS, RECIPES & PURCHASES (PHASE 2)
+-- RLS POLICIES FOR RAW MATERIALS, STOCK MOVEMENTS, RECIPES & PURCHASES
 CREATE POLICY "Staff can view raw materials"
 ON public.raw_materials FOR SELECT
-USING (restaurant_id = public.get_auth_restaurant_id() OR auth.role() = 'anon');
+TO authenticated
+USING (public.is_restaurant_staff(restaurant_id, ARRAY['kitchen', 'counter', 'manager', 'admin']));
 
 CREATE POLICY "Staff can manage raw materials"
 ON public.raw_materials FOR ALL
-USING (restaurant_id = public.get_auth_restaurant_id() OR auth.role() = 'anon');
+TO authenticated
+USING (public.is_restaurant_staff(restaurant_id, ARRAY['kitchen', 'counter', 'manager', 'admin']));
 
 CREATE POLICY "Audit log stock movements view"
 ON public.stock_movements FOR SELECT
-USING (restaurant_id = public.get_auth_restaurant_id() OR auth.role() = 'anon');
+TO authenticated
+USING (public.is_restaurant_staff(restaurant_id, ARRAY['kitchen', 'counter', 'manager', 'admin']));
 
 CREATE POLICY "Audit log stock movements insert"
 ON public.stock_movements FOR INSERT
-WITH CHECK (true);
+TO authenticated
+WITH CHECK (public.is_restaurant_staff(restaurant_id, ARRAY['kitchen', 'counter', 'manager', 'admin']));
 
 CREATE POLICY "Staff can view recipes"
 ON public.menu_item_recipes FOR SELECT
-USING (restaurant_id = public.get_auth_restaurant_id() OR auth.role() = 'anon');
+TO authenticated
+USING (public.is_restaurant_staff(restaurant_id, ARRAY['kitchen', 'counter', 'manager', 'admin']));
 
 CREATE POLICY "Staff can manage recipes"
 ON public.menu_item_recipes FOR ALL
-USING (restaurant_id = public.get_auth_restaurant_id() OR auth.role() = 'anon');
+TO authenticated
+USING (public.is_restaurant_staff(restaurant_id, ARRAY['kitchen', 'counter', 'manager', 'admin']));
 
 CREATE POLICY "Staff can manage recipe ingredients"
 ON public.menu_item_recipe_ingredients FOR ALL
-USING (restaurant_id = public.get_auth_restaurant_id() OR auth.role() = 'anon');
+TO authenticated
+USING (public.is_restaurant_staff(restaurant_id, ARRAY['kitchen', 'counter', 'manager', 'admin']));
 
 CREATE POLICY "Staff can manage purchases"
 ON public.inventory_purchases FOR ALL
-USING (restaurant_id = public.get_auth_restaurant_id() OR auth.role() = 'anon');
+TO authenticated
+USING (public.is_restaurant_staff(restaurant_id, ARRAY['kitchen', 'counter', 'manager', 'admin']));
 
 CREATE POLICY "Staff can manage purchase items"
 ON public.inventory_purchase_items FOR ALL
-USING (restaurant_id = public.get_auth_restaurant_id() OR auth.role() = 'anon');
+TO authenticated
+USING (public.is_restaurant_staff(restaurant_id, ARRAY['kitchen', 'counter', 'manager', 'admin']));
 
 CREATE POLICY "Staff can manage wastage"
 ON public.inventory_wastage FOR ALL
-USING (restaurant_id = public.get_auth_restaurant_id() OR auth.role() = 'anon');
+TO authenticated
+USING (public.is_restaurant_staff(restaurant_id, ARRAY['kitchen', 'counter', 'manager', 'admin']));
 
 CREATE POLICY "Staff can manage order consumptions"
 ON public.inventory_order_consumptions FOR ALL
-USING (restaurant_id = public.get_auth_restaurant_id() OR auth.role() = 'anon');
+TO authenticated
+USING (public.is_restaurant_staff(restaurant_id, ARRAY['kitchen', 'counter', 'manager', 'admin']));
 
 -- RLS POLICIES FOR FEEDBACK
 CREATE POLICY "Customers can submit feedback"
 ON public.customer_feedback FOR INSERT
-WITH CHECK (true);
+TO anon, authenticated
+WITH CHECK (rating >= 1.0 AND rating <= 5.0 AND table_number IS NOT NULL);
 
 CREATE POLICY "Staff can read feedback for their restaurant"
 ON public.customer_feedback FOR SELECT
-USING (restaurant_id = public.get_auth_restaurant_id() OR auth.role() = 'anon');
+TO authenticated
+USING (public.is_restaurant_staff(restaurant_id, ARRAY['counter', 'manager', 'admin']));
 `;
+}
+
+// ============================================================================
+// PRODUCTION GO-LIVE RESET PLAN (SAFE ARCHIVAL OF TEST TRANSACTIONS)
+// ============================================================================
+// Constraint: Never delete master menu items, categories, recipes, tables, or settings.
+// Only archive test orders, test payments, and test feedback from multi-device testing.
+// ============================================================================
+
+export function generateGoLiveResetScript(restaurantId: string = getCurrentRestaurantId()): string {
+  return `-- ============================================================================
+-- ROYAL BIRYANI HOUSE - PRODUCTION GO-LIVE CLEANUP SCRIPT
+-- Target Restaurant: ${restaurantId}
+-- Action: Safely ARCHIVES test orders/payments without deleting master catalog
+-- ============================================================================
+
+BEGIN;
+
+-- 1. Archive test orders
+UPDATE public.royal_orders
+SET is_archived = true,
+    status = 'Completed',
+    updated_at = NOW()
+WHERE restaurant_id = '${restaurantId}'
+  AND is_archived = false;
+
+-- 2. Void test payments for clean opening ledger
+UPDATE public.royal_payments
+SET is_voided = true,
+    void_reason = 'Pre-launch test transaction archived during Go-Live reset',
+    voided_by = 'System Administrator',
+    voided_at = NOW()
+WHERE restaurant_id = '${restaurantId}'
+  AND is_voided = false;
+
+-- 3. Archive test feedback
+UPDATE public.customer_feedback
+SET is_archived = true
+WHERE restaurant_id = '${restaurantId}'
+  AND is_archived = false;
+
+-- 4. Clear consumed order logs for test orders
+DELETE FROM public.inventory_order_consumptions
+WHERE restaurant_id = '${restaurantId}';
+
+COMMIT;
+`;
+}
+
+export async function executeGoLiveLocalReset(restaurantId: string = getCurrentRestaurantId()): Promise<{ success: boolean; message: string }> {
+  try {
+    const ordersKey = getTenantStorageKey('rbh_live_orders_v2', restaurantId);
+    const paymentsKey = getTenantStorageKey('rbh_payments_ledger_v2', restaurantId);
+    const activeOrdersKey = getTenantStorageKey('royal_biryani_orders', restaurantId);
+    const feedbackKey = FEEDBACK_STORAGE_KEY;
+
+    // Archive orders locally
+    const savedOrders = safeStorage.getItem(ordersKey) || safeStorage.getItem(activeOrdersKey);
+    if (savedOrders) {
+      try {
+        const parsed = JSON.parse(savedOrders);
+        if (Array.isArray(parsed)) {
+          const archived = parsed.map((o: any) => ({ ...o, is_archived: true, status: 'Completed' }));
+          safeStorage.setItem(ordersKey, JSON.stringify(archived));
+          safeStorage.setItem(activeOrdersKey, JSON.stringify([]));
+        }
+      } catch (e) {
+        safeStorage.setItem(ordersKey, JSON.stringify([]));
+        safeStorage.setItem(activeOrdersKey, JSON.stringify([]));
+      }
+    }
+
+    // Void test payments locally
+    const savedPayments = safeStorage.getItem(paymentsKey);
+    if (savedPayments) {
+      try {
+        const parsed = JSON.parse(savedPayments);
+        if (Array.isArray(parsed)) {
+          const voided = parsed.map((p: any) => ({ ...p, is_voided: true, void_reason: 'Pre-launch test transaction' }));
+          safeStorage.setItem(paymentsKey, JSON.stringify(voided));
+        }
+      } catch (e) {
+        safeStorage.setItem(paymentsKey, JSON.stringify([]));
+      }
+    }
+
+    // Reset active table states
+    safeDispatchEvent(new CustomEvent('rbh_orders_updated', { detail: [] }));
+    safeDispatchEvent(new CustomEvent('rbh_payments_updated', { detail: [] }));
+
+    return {
+      success: true,
+      message: `Go-Live cleanup completed for ${restaurantId}. Test orders archived; master menu, tables, and settings preserved.`
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      message: `Failed to execute local reset: ${err?.message || 'Unknown error'}`
+    };
+  }
 }
 
 

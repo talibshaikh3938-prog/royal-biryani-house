@@ -93,6 +93,7 @@ export interface RestaurantTable {
   isActive: boolean;
   displayOrder?: number;
   qrCodeUrl?: string;
+  qr_token?: string;
   created_at?: string;
   updated_at?: string;
 }

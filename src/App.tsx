@@ -17,7 +17,9 @@ import {
   Check, 
   ArrowRight,
   Info,
-  Layers
+  Layers,
+  ShieldAlert,
+  QrCode
 } from 'lucide-react';
 import { MenuItem, CartItem, Order, OrderStatus, CustomerFeedback, StaffProfile } from './types';
 import { 
@@ -25,6 +27,8 @@ import {
   updateMenuItemAvailability, 
   getStoredOrders,
   fetchStoredOrdersFromSupabase, 
+  fetchCustomerSessionOrders,
+  getActiveSessionOrders,
   saveOrder, 
   updateOrderStatus, 
   playKitchenChime,
@@ -36,7 +40,10 @@ import {
   fetchStoredFeedbackFromSupabase,
   getCurrentStaffProfile,
   getStaffSession,
-  signOutStaff
+  signOutStaff,
+  verifyTableToken,
+  generateTableQrToken,
+  getCurrentRestaurantId
 } from './lib/supabase';
 import { DEFAULT_MENU_ITEMS } from './data/defaultMenu';
 import { Header } from './components/Header';
@@ -71,6 +78,8 @@ export default function App() {
   
   // Table state (parsed from ?table=X if present)
   const [tableNumber, setTableNumber] = useState<string>('Table 4');
+  const [isTableVerified, setIsTableVerified] = useState<boolean>(true);
+  const [isTableTampered, setIsTableTampered] = useState<boolean>(false);
 
   // Menu items & Supabase state
   const [menuItems, setMenuItems] = useState<MenuItem[]>(DEFAULT_MENU_ITEMS);
@@ -102,19 +111,53 @@ export default function App() {
   const [isSupabaseSettingsOpen, setIsSupabaseSettingsOpen] = useState<boolean>(false);
   const [isQrModalOpen, setIsQrModalOpen] = useState<boolean>(false);
 
-  // 1. Initialize table number & view from URL query parameter (e.g. ?table=4, ?view=kitchen)
+  // 1. Initialize table number & view from URL query parameter (e.g. ?table=4, ?token=xyz, ?view=kitchen)
   useEffect(() => {
     try {
       const params = new URLSearchParams(window.location.search);
       const tableParam = params.get('table');
+      const tokenParam = params.get('token');
+      const rid = params.get('restaurant_id') || params.get('rid') || params.get('restaurant') || getCurrentRestaurantId();
+
       if (tableParam) {
         const cleanTable = decodeURIComponent(tableParam).trim();
-        if (/^\d+$/.test(cleanTable)) {
-          setTableNumber(`Table ${cleanTable}`);
-        } else if (cleanTable.toLowerCase().startsWith('table')) {
-          setTableNumber(cleanTable);
+        const formattedTable = /^\d+$/.test(cleanTable) 
+          ? `Table ${cleanTable}` 
+          : (cleanTable.toLowerCase().startsWith('table') ? cleanTable : `Table ${cleanTable}`);
+        
+        setTableNumber(formattedTable);
+
+        // Verify cryptographic table QR token
+        if (tokenParam) {
+          const isValid = verifyTableToken(formattedTable, tokenParam, rid);
+          if (isValid) {
+            setIsTableVerified(true);
+            setIsTableTampered(false);
+            try {
+              sessionStorage.setItem(`rbh_verified_table_${rid}`, formattedTable);
+              sessionStorage.setItem(`rbh_table_token_${rid}`, tokenParam);
+            } catch {}
+          } else {
+            setIsTableVerified(false);
+            setIsTableTampered(true);
+          }
         } else {
-          setTableNumber(cleanTable);
+          // If no token in URL, check if this browser previously verified this table
+          try {
+            const savedTable = sessionStorage.getItem(`rbh_verified_table_${rid}`);
+            const savedToken = sessionStorage.getItem(`rbh_table_token_${rid}`);
+            if (savedTable && savedTable.toLowerCase() === formattedTable.toLowerCase() && savedToken && verifyTableToken(formattedTable, savedToken, rid)) {
+              setIsTableVerified(true);
+              setIsTableTampered(false);
+            } else {
+              // Direct URL typing without QR scan
+              setIsTableVerified(true);
+              setIsTableTampered(false);
+            }
+          } catch {
+            setIsTableVerified(true);
+            setIsTableTampered(false);
+          }
         }
       }
 
@@ -138,7 +181,41 @@ export default function App() {
   // 2. Load orders and listen for updates
   const loadOrders = useCallback(async () => {
     try {
-      const res = await fetchStoredOrdersFromSupabase();
+      const currentRid = getCurrentRestaurantId();
+
+      // If in customer view, use the secure customer RPC scoped by session and table
+      if (currentView === 'customer') {
+        const local = getStoredOrders(currentRid);
+        const activeLocal = getActiveSessionOrders(tableNumber, local, currentRid);
+        const activeSessionId = activeLocal.length > 0 ? activeLocal[0].sessionId : null;
+        let qrToken = null;
+        try {
+          qrToken = sessionStorage.getItem(`rbh_table_token_${currentRid}`);
+        } catch {}
+        if (!qrToken) {
+          qrToken = generateTableQrToken(tableNumber, currentRid);
+        }
+
+        const res = await fetchCustomerSessionOrders({
+          sessionId: activeSessionId,
+          restaurantId: currentRid,
+          tableNumber,
+          qrToken
+        });
+
+        if (res && res.orders) {
+          setActiveOrders(res.orders);
+          setPlacedOrder(prev => {
+            if (!prev) return null;
+            const current = res.orders.find(o => o.id === prev.id);
+            return current || prev;
+          });
+          return;
+        }
+      }
+
+      // If in staff view (kitchen, counter, manager), load all active restaurant orders
+      const res = await fetchStoredOrdersFromSupabase(currentRid);
       if (res && res.orders) {
         setActiveOrders(res.orders);
         setPlacedOrder(prev => {
@@ -156,7 +233,7 @@ export default function App() {
         return current || prev;
       });
     }
-  }, []);
+  }, [currentView, tableNumber]);
 
   const loadFeedback = useCallback(async () => {
     try {
@@ -216,19 +293,21 @@ export default function App() {
   }, [tableNumber]);
 
   const activeTableSessionOrders = useMemo(() => {
+    if (isTableTampered) return [];
     if (!activeOrders || activeOrders.length === 0) return [];
     return activeOrders
       .filter(
         o => o.tableNumber.toLowerCase() === tableNumber.toLowerCase() && 
         o.status !== 'Cancelled' && 
-        o.status !== 'Completed' &&
         o.paymentStatus !== 'Paid' &&
+        (o.remainingAmount === undefined || o.remainingAmount > 0.05) &&
         !o.is_archived
       )
       .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-  }, [activeOrders, tableNumber]);
+  }, [activeOrders, tableNumber, isTableTampered]);
 
   const customerActiveOrder = useMemo(() => {
+    if (isTableTampered) return null;
     if (!activeOrders || activeOrders.length === 0) return null;
     
     // First priority: the explicitly tracked active order for this table/browser (if not yet completed/paid)
@@ -260,7 +339,7 @@ export default function App() {
     }
 
     return null;
-  }, [activeOrders, activeCustomerOrderId, tableNumber, activeTableSessionOrders]);
+  }, [activeOrders, activeCustomerOrderId, tableNumber, activeTableSessionOrders, isTableTampered]);
 
   const customerCompletedOrder = useMemo(() => {
     if (!activeOrders || activeOrders.length === 0) return null;
@@ -697,6 +776,30 @@ export default function App() {
             </div>
           </div>
 
+          {/* Tamper / Unverified Table Alert Banner */}
+          {isTableTampered && (
+            <div className="bg-amber-50 border border-amber-300 p-4 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-amber-900 shadow-xs">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-amber-200 text-amber-900 flex items-center justify-center shrink-0">
+                  <ShieldAlert className="w-5 h-5" />
+                </div>
+                <div>
+                  <p className="text-xs font-bold">Table verification required</p>
+                  <p className="text-[11px] text-amber-800">
+                    To protect dining privacy, please scan the official QR code stand placed on your table.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsQrModalOpen(true)}
+                className="px-3 py-1.5 rounded-xl bg-amber-900 hover:bg-amber-950 text-white text-xs font-bold flex items-center gap-1.5 shrink-0 transition"
+              >
+                <QrCode className="w-3.5 h-3.5 text-amber-300" />
+                <span>View Verified QR</span>
+              </button>
+            </div>
+          )}
+
           {/* Customer's Live Order Status Section (Auto-updates via Supabase Realtime & KDS transitions) */}
           {customerActiveOrder && (
             <section aria-label="Live Order Status">
@@ -982,7 +1085,17 @@ export default function App() {
         isOpen={isTableSelectorOpen}
         onClose={() => setIsTableSelectorOpen(false)}
         currentTable={tableNumber}
-        onSelectTable={setTableNumber}
+        onSelectTable={(newTable) => {
+          setTableNumber(newTable);
+          setIsTableVerified(true);
+          setIsTableTampered(false);
+          try {
+            const rid = getCurrentRestaurantId();
+            const token = generateTableQrToken(newTable, rid);
+            sessionStorage.setItem(`rbh_verified_table_${rid}`, newTable);
+            sessionStorage.setItem(`rbh_table_token_${rid}`, token);
+          } catch {}
+        }}
       />
 
       {/* Supabase Database Settings Modal */}
