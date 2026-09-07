@@ -102,7 +102,9 @@ export interface RestaurantSettings {
   id: string;
   restaurant_id?: string;
   name: string;
+  restaurant_name?: string;
   logo?: string;
+  logo_url?: string;
   tagline?: string;
   address?: string;
   phone?: string;
@@ -115,8 +117,10 @@ export interface RestaurantSettings {
   restaurantType?: string; // e.g. 'Dine-In & Takeaway', 'Fine Dining', 'Bar & Kitchen', 'QSR / Fast Casual', 'Cafe'
   gstEnabled?: boolean;
   gstRate?: number; // e.g. 5.0
+  gst_percentage?: number;
   serviceChargeEnabled?: boolean;
   serviceChargeRate?: number; // e.g. 5.0 or 10.0
+  service_charge_percentage?: number;
   receiptFooter?: string; // e.g. "Thank you for dining with us! Please visit again."
   currencySymbol?: string; // '₹'
   created_at?: string;
@@ -221,6 +225,7 @@ export interface Order {
   customerNotes?: string;
   createdAt: string;
   estimatedMinutes: number;
+  qr_token?: string;
   is_archived?: boolean;
 }
 
@@ -325,7 +330,12 @@ export type StockMovementType =
   | 'OPENING_STOCK'
   | 'add' 
   | 'reduce' 
-  | 'set';
+  | 'set'
+  | 'deduct'
+  | 'waste'
+  | 'audit_reset';
+
+export type DbStockMovementType = 'add' | 'deduct' | 'waste' | 'audit_reset';
 
 export type StockMovementReason = 
   | 'New delivery' 

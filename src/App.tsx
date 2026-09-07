@@ -151,11 +151,12 @@ export default function App() {
               setIsTableTampered(false);
             } else {
               // Direct URL typing without QR scan
-              setIsTableVerified(true);
+              setIsTableVerified(false);
               setIsTableTampered(false);
+              sessionStorage.removeItem(`rbh_table_token_${rid}`);
             }
           } catch {
-            setIsTableVerified(true);
+            setIsTableVerified(false);
             setIsTableTampered(false);
           }
         }
@@ -529,9 +530,25 @@ export default function App() {
 
       // Generate realistic readable order ID (e.g. RBH-106)
       const orderNum = Math.floor(100 + Math.random() * 900);
+      const rid = getCurrentRestaurantId();
+      let activeQrToken: string | undefined = undefined;
+      try {
+        const savedTable = sessionStorage.getItem(`rbh_verified_table_${rid}`);
+        const savedToken = sessionStorage.getItem(`rbh_table_token_${rid}`);
+        if (
+          savedTable && 
+          savedTable.toLowerCase() === (tableNumber || '').toLowerCase().trim() && 
+          savedToken && 
+          verifyTableToken(tableNumber || 'Table 1', savedToken, rid)
+        ) {
+          activeQrToken = savedToken;
+        }
+      } catch {}
+
       const newOrder: Order = {
         id: `RBH-${orderNum}`,
         tableNumber: tableNumber || 'Table 1',
+        qr_token: activeQrToken,
         items: cartItems.map((ci) => ({
           id: ci.item.id,
           name: ci.item.Name,
@@ -1087,13 +1104,12 @@ export default function App() {
         currentTable={tableNumber}
         onSelectTable={(newTable) => {
           setTableNumber(newTable);
-          setIsTableVerified(true);
+          setIsTableVerified(false);
           setIsTableTampered(false);
           try {
             const rid = getCurrentRestaurantId();
-            const token = generateTableQrToken(newTable, rid);
-            sessionStorage.setItem(`rbh_verified_table_${rid}`, newTable);
-            sessionStorage.setItem(`rbh_table_token_${rid}`, token);
+            sessionStorage.removeItem(`rbh_verified_table_${rid}`);
+            sessionStorage.removeItem(`rbh_table_token_${rid}`);
           } catch {}
         }}
       />

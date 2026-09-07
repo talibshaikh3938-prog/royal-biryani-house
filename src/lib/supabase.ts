@@ -7,6 +7,7 @@ import {
   RawMaterial, 
   StockMovement, 
   StockMovementType, 
+  DbStockMovementType,
   StockMovementReason, 
   RawMaterialStockStatus,
   RawMaterialUnit,
@@ -815,15 +816,6 @@ export async function fetchMenuItems(): Promise<{ items: MenuItem[]; source: 'su
         }
       }
 
-      // 3. If still no rows matched by exact restaurant_id, attempt fallback select
-      if ((error || !data || data.length === 0)) {
-        const fallbackAll = await supabase.from('menu_items').select('*');
-        if (!fallbackAll.error && fallbackAll.data && fallbackAll.data.length > 0) {
-          data = fallbackAll.data;
-          error = null;
-        }
-      }
-
       if (data && data.length > 0) {
         const mapped = data.map(mapSupabaseRowToMenuItem);
         
@@ -996,42 +988,35 @@ export async function updateMenuItemAvailability(id: string | number, available:
 export async function seedDefaultMenuToSupabase(): Promise<{ success: boolean; message: string }> {
   const config = getSupabaseConfig();
   const supabase = getSupabaseClient();
+  const restaurantId = getCurrentRestaurantId();
 
   if (!supabase) {
     return { success: false, message: 'Please configure your Supabase URL and Anon Key first.' };
   }
 
   try {
-    const rowsToInsert = DEFAULT_MENU_ITEMS.map(item => ({
-      Name: item.Name,
-      Price: item.Price,
-      Description: item.Description,
-      Image_url: item.Image_url,
-      Available: item.Available,
+    const rowsToInsert = DEFAULT_MENU_ITEMS.map((item, idx) => ({
+      id: String(item.id),
+      restaurant_id: restaurantId,
+      name: item.Name,
+      price: item.Price,
+      description: item.Description,
+      image_url: item.Image_url,
+      available: item.Available,
+      stock_status: item.stockStatus || 'In Stock',
+      is_bestseller: Boolean(item.isBestSeller),
+      display_order: idx + 1
     }));
 
-    const { data, error } = await supabase
-      .from(config.tableName)
-      .insert(rowsToInsert)
-      .select();
+    const { error } = await supabase
+      .from('menu_items')
+      .upsert(rowsToInsert, { onConflict: 'id' });
 
     if (error) {
-      // If column casing fails, try lower_case
-      const lowerRows = DEFAULT_MENU_ITEMS.map(item => ({
-        name: item.Name,
-        price: item.Price,
-        description: item.Description,
-        image_url: item.Image_url,
-        available: item.Available,
-      }));
-
-      const retry = await supabase.from(config.tableName).insert(lowerRows).select();
-      if (retry.error) {
-        return { success: false, message: `Failed to insert: ${retry.error.message}` };
-      }
+      return { success: false, message: `Failed to insert: ${error.message}` };
     }
 
-    return { success: true, message: `Successfully inserted ${rowsToInsert.length} Royal Biryani House dishes into "${config.tableName}"!` };
+    return { success: true, message: `Successfully seeded ${rowsToInsert.length} dishes for "${restaurantId}" into menu_items!` };
   } catch (err: any) {
     return { success: false, message: err.message || 'Error inserting into Supabase' };
   }
@@ -1066,22 +1051,35 @@ export async function fetchRestaurantSettings(restaurantId: string = getCurrentR
 
       const raw = (!rpcError && rpcData) ? (Array.isArray(rpcData) ? rpcData[0] : rpcData) : null;
       if (raw) {
+        const gstPct = typeof raw.gst_percentage === 'number' ? raw.gst_percentage : (typeof raw.gst_rate === 'number' ? raw.gst_rate : local.gstRate);
+        const scPct = typeof raw.service_charge_percentage === 'number' ? raw.service_charge_percentage : (typeof raw.service_charge_rate === 'number' ? raw.service_charge_rate : local.serviceChargeRate);
+        const settingsName = raw.restaurant_name || raw.name || local.name;
+        const settingsLogo = raw.logo_url || raw.logo || local.logo || '';
+        const settingsGstin = raw.gstin || local.gstin || '';
+
         const settings: RestaurantSettings = {
           id: raw.id || restaurantId,
           restaurant_id: raw.restaurant_id || restaurantId,
-          name: raw.name || local.name,
-          logo: raw.logo || local.logo || '',
+          name: settingsName,
+          restaurant_name: settingsName,
+          logo: settingsLogo,
+          logo_url: settingsLogo,
           tagline: raw.tagline || local.tagline || '',
           address: raw.address || local.address || '',
           phone: raw.phone || local.phone || '',
+          whatsapp: raw.whatsapp || local.whatsapp || '',
           email: raw.email || local.email || '',
+          gstin: settingsGstin,
+          gstNumber: settingsGstin || local.gstNumber || '',
           openingTime: raw.opening_time || raw.openingTime || local.openingTime,
           closingTime: raw.closing_time || raw.closingTime || local.closingTime,
           restaurantType: raw.restaurant_type || raw.restaurantType || local.restaurantType,
           gstEnabled: raw.gst_enabled !== undefined ? Boolean(raw.gst_enabled) : local.gstEnabled,
-          gstRate: typeof raw.gst_rate === 'number' ? raw.gst_rate : local.gstRate,
+          gstRate: gstPct,
+          gst_percentage: gstPct,
           serviceChargeEnabled: raw.service_charge_enabled !== undefined ? Boolean(raw.service_charge_enabled) : local.serviceChargeEnabled,
-          serviceChargeRate: typeof raw.service_charge_rate === 'number' ? raw.service_charge_rate : local.serviceChargeRate,
+          serviceChargeRate: scPct,
+          service_charge_percentage: scPct,
           receiptFooter: raw.receipt_footer || local.receiptFooter,
           currencySymbol: raw.currency_symbol || raw.currency || local.currencySymbol || '₹',
           created_at: raw.created_at,
@@ -1099,22 +1097,35 @@ export async function fetchRestaurantSettings(restaurantId: string = getCurrentR
         .maybeSingle();
 
       if (!error && data) {
+        const gstPct = typeof data.gst_percentage === 'number' ? data.gst_percentage : (typeof data.gst_rate === 'number' ? data.gst_rate : local.gstRate);
+        const scPct = typeof data.service_charge_percentage === 'number' ? data.service_charge_percentage : (typeof data.service_charge_rate === 'number' ? data.service_charge_rate : local.serviceChargeRate);
+        const settingsName = data.restaurant_name || data.name || local.name;
+        const settingsLogo = data.logo_url || data.logo || local.logo || '';
+        const settingsGstin = data.gstin || local.gstin || '';
+
         const settings: RestaurantSettings = {
           id: data.id || restaurantId,
           restaurant_id: data.restaurant_id || restaurantId,
-          name: data.name || local.name,
-          logo: data.logo || local.logo || '',
+          name: settingsName,
+          restaurant_name: settingsName,
+          logo: settingsLogo,
+          logo_url: settingsLogo,
           tagline: data.tagline || local.tagline || '',
           address: data.address || local.address || '',
           phone: data.phone || local.phone || '',
+          whatsapp: data.whatsapp || local.whatsapp || '',
           email: data.email || local.email || '',
+          gstin: settingsGstin,
+          gstNumber: settingsGstin || local.gstNumber || '',
           openingTime: data.opening_time || data.openingTime || local.openingTime,
           closingTime: data.closing_time || data.closingTime || local.closingTime,
           restaurantType: data.restaurant_type || data.restaurantType || local.restaurantType,
           gstEnabled: data.gst_enabled !== undefined ? Boolean(data.gst_enabled) : local.gstEnabled,
-          gstRate: typeof data.gst_rate === 'number' ? data.gst_rate : local.gstRate,
+          gstRate: gstPct,
+          gst_percentage: gstPct,
           serviceChargeEnabled: data.service_charge_enabled !== undefined ? Boolean(data.service_charge_enabled) : local.serviceChargeEnabled,
-          serviceChargeRate: typeof data.service_charge_rate === 'number' ? data.service_charge_rate : local.serviceChargeRate,
+          serviceChargeRate: scPct,
+          service_charge_percentage: scPct,
           receiptFooter: data.receipt_footer || local.receiptFooter,
           currencySymbol: data.currency_symbol || data.currency || local.currencySymbol || '₹',
           created_at: data.created_at,
@@ -1158,23 +1169,23 @@ export async function saveRestaurantSettings(settings: RestaurantSettings): Prom
   if (supabase) {
     try {
       const dbPayload = {
-        id: payload.id,
         restaurant_id: payload.restaurant_id,
-        name: payload.name,
-        logo: payload.logo || null,
+        restaurant_name: payload.name || payload.restaurant_name,
+        logo_url: payload.logo || payload.logo_url || null,
         tagline: payload.tagline || null,
         address: payload.address || null,
         phone: payload.phone || null,
+        whatsapp: payload.whatsapp || null,
         email: payload.email || null,
+        gstin: payload.gstin || payload.gstNumber || null,
         opening_time: payload.openingTime || null,
         closing_time: payload.closingTime || null,
         restaurant_type: payload.restaurantType || 'Dine-In & Takeaway',
         gst_enabled: Boolean(payload.gstEnabled),
-        gst_rate: Number(payload.gstRate || 0),
+        gst_percentage: Number(payload.gstRate ?? payload.gst_percentage ?? 0),
         service_charge_enabled: Boolean(payload.serviceChargeEnabled),
-        service_charge_rate: Number(payload.serviceChargeRate || 0),
+        service_charge_percentage: Number(payload.serviceChargeRate ?? payload.service_charge_percentage ?? 0),
         receipt_footer: payload.receiptFooter || null,
-        currency: payload.currencySymbol || 'INR',
         updated_at: new Date().toISOString()
       };
 
@@ -1227,12 +1238,12 @@ export async function fetchRestaurantTables(restaurantId: string = getCurrentRes
 
   if (supabase) {
     try {
-      // 1. Primary: Use secure customer RPC for table discovery
-      const { data: rpcData, error: rpcError } = await supabase.rpc('customer_get_tables');
+      // 1. Primary: Use secure customer RPC for table discovery with tenant scope
+      const { data: rpcData, error: rpcError } = await supabase.rpc('customer_get_tables', {
+        p_restaurant_id: restaurantId
+      });
       if (!rpcError && rpcData && Array.isArray(rpcData) && rpcData.length > 0) {
-        const filtered = rpcData.filter((row: any) => !row.restaurant_id || row.restaurant_id === restaurantId);
-        const sourceData = filtered.length > 0 ? filtered : rpcData;
-        const mapped: RestaurantTable[] = sourceData.map((row: any) => ({
+        const mapped: RestaurantTable[] = rpcData.map((row: any) => ({
           id: String(row.id),
           restaurant_id: row.restaurant_id || restaurantId,
           tableNumber: row.table_number || row.tableNumber || `Table ${row.id}`,
@@ -1241,6 +1252,7 @@ export async function fetchRestaurantTables(restaurantId: string = getCurrentRes
           isActive: row.is_active !== undefined ? Boolean(row.is_active) : true,
           displayOrder: Number(row.display_order || 0),
           qrCodeUrl: row.qr_code_url || undefined,
+          qr_token: row.qr_token || undefined,
           created_at: row.created_at,
           updated_at: row.updated_at
         }));
@@ -1265,6 +1277,7 @@ export async function fetchRestaurantTables(restaurantId: string = getCurrentRes
           isActive: row.is_active !== undefined ? Boolean(row.is_active) : true,
           displayOrder: Number(row.display_order || 0),
           qrCodeUrl: row.qr_code_url || undefined,
+          qr_token: row.qr_token || undefined,
           created_at: row.created_at,
           updated_at: row.updated_at
         }));
@@ -1282,12 +1295,16 @@ export async function saveRestaurantTable(table: Partial<RestaurantTable>): Prom
   const restaurantId = table.restaurant_id || getCurrentRestaurantId();
   const tables = getStoredRestaurantTables(restaurantId);
   const now = new Date().toISOString();
+  const tableNum = table.tableNumber || `Table ${tables.length + 1}`;
+  const qrToken = table.qr_token || generateTableQrToken(tableNum, restaurantId);
 
   let target: RestaurantTable;
   if (table.id && tables.some(t => t.id === table.id)) {
     target = {
       ...tables.find(t => t.id === table.id)!,
       ...table,
+      tableNumber: tableNum,
+      qr_token: qrToken,
       restaurant_id: restaurantId,
       updated_at: now
     } as RestaurantTable;
@@ -1298,12 +1315,13 @@ export async function saveRestaurantTable(table: Partial<RestaurantTable>): Prom
     target = {
       id: newId,
       restaurant_id: restaurantId,
-      tableNumber: table.tableNumber || `Table ${tables.length + 1}`,
+      tableNumber: tableNum,
       section: table.section || 'Ground Floor',
       capacity: Number(table.capacity || 4),
       isActive: table.isActive !== undefined ? Boolean(table.isActive) : true,
       displayOrder: table.displayOrder !== undefined ? table.displayOrder : tables.length + 1,
       qrCodeUrl: table.qrCodeUrl,
+      qr_token: qrToken,
       created_at: now,
       updated_at: now
     };
@@ -1328,6 +1346,7 @@ export async function saveRestaurantTable(table: Partial<RestaurantTable>): Prom
         table_number: target.tableNumber,
         section: target.section,
         capacity: target.capacity,
+        qr_token: target.qr_token,
         is_active: target.isActive,
         display_order: target.displayOrder,
         qr_code_url: target.qrCodeUrl || null,
@@ -1715,28 +1734,16 @@ export async function saveMenuItemToSupabase(item: Partial<MenuItem> & { Name: s
       const payload: Record<string, any> = {
         id: idStr,
         restaurant_id: restaurantId,
+        category_id: fullItem.categoryId || null,
+        subcategory_id: fullItem.subcategoryId || null,
         name: fullItem.Name,
         price: fullItem.Price,
-        base_price: fullItem.basePrice || fullItem.Price,
         description: fullItem.Description,
         image_url: fullItem.Image_url,
         available: fullItem.Available,
-        category: fullItem.category || 'Biryani Specials',
-        category_id: fullItem.categoryId || null,
-        subcategory_id: fullItem.subcategoryId || null,
-        subcategory_name: fullItem.subcategoryName || null,
-        is_veg: Boolean(fullItem.isVeg),
-        veg_type: fullItem.vegType || (fullItem.isVeg ? 'Veg' : 'Non-Veg'),
-        is_spicy: Boolean(fullItem.isSpicy),
         is_bestseller: Boolean(fullItem.isBestSeller),
-        prep_time: fullItem.prepTime || '15-20 mins',
-        stock_count: typeof fullItem.stockCount === 'number' ? fullItem.stockCount : 50,
         stock_status: fullItem.stockStatus || (fullItem.Available ? 'In Stock' : 'Out of Stock'),
-        variants: fullItem.variants || [],
-        addons: fullItem.addons || [],
-        display_order: fullItem.displayOrder || 1,
-        is_archived: Boolean(fullItem.is_archived),
-        updated_at: new Date().toISOString()
+        display_order: fullItem.displayOrder || 1
       };
 
       const targetTable = config.tableName || 'menu_items';
@@ -2137,28 +2144,16 @@ export async function bulkImportMenuItems(input: Partial<MenuItem>[] | string): 
       const rows = prepared.map(item => ({
         id: String(item.id),
         restaurant_id: restaurantId,
+        category_id: item.categoryId || null,
+        subcategory_id: item.subcategoryId || null,
         name: item.Name,
         price: item.Price,
-        base_price: item.basePrice || item.Price,
         description: item.Description,
         image_url: item.Image_url,
         available: item.Available,
-        category: item.category,
-        category_id: item.categoryId || null,
-        subcategory_id: item.subcategoryId || null,
-        subcategory_name: item.subcategoryName || null,
-        is_veg: Boolean(item.isVeg),
-        veg_type: item.vegType,
-        is_spicy: Boolean(item.isSpicy),
         is_bestseller: Boolean(item.isBestSeller),
-        prep_time: item.prepTime,
-        stock_count: item.stockCount,
         stock_status: item.stockStatus,
-        variants: item.variants,
-        addons: item.addons,
-        display_order: item.displayOrder,
-        is_archived: false,
-        updated_at: new Date().toISOString()
+        display_order: item.displayOrder
       }));
 
       await supabase.from(targetTable).upsert(rows, { onConflict: 'id' });
@@ -2308,6 +2303,7 @@ export function mapOrderToSupabasePayload(order: Order): Record<string, any> {
     order_id: order.id,
     restaurant_id: currentRid,
     table_number: order.tableNumber,
+    qr_token: order.qr_token || null,
     session_id: order.sessionId || null,
     round: order.round || 1,
     is_addon: Boolean(order.isAddon),
@@ -2429,6 +2425,7 @@ export function mapSupabaseRowToOrder(row: Record<string, any>): Order {
     customerNotes: row.customer_notes || row.customerNotes,
     createdAt: row.created_at || row.createdAt || new Date().toISOString(),
     estimatedMinutes: row.estimated_minutes || row.estimatedMinutes || 15,
+    qr_token: row.qr_token || undefined,
     is_archived: Boolean(row.is_archived || row.isArchived)
   };
 }
@@ -2444,19 +2441,6 @@ export async function fetchStoredOrdersFromSupabase(
         .select('*')
         .eq('restaurant_id', restaurantId)
         .order('created_at', { ascending: false });
-
-      if (error) {
-        // Fallback to 'orders' table
-        const retry = await supabase
-          .from('orders')
-          .select('*')
-          .eq('restaurant_id', restaurantId)
-          .order('created_at', { ascending: false });
-        if (!retry.error) {
-          data = retry.data;
-          error = null;
-        }
-      }
 
       if (!error && data) {
         if (data.length > 0) {
@@ -2505,11 +2489,7 @@ export async function fetchStoredOrdersFromSupabase(
           const seeded = INITIAL_HISTORICAL_ORDERS.map(o => ({ ...o, restaurant_id: DEFAULT_RESTAURANT_ID }));
           saveStoredOrders(seeded, DEFAULT_RESTAURANT_ID);
           const rowsToInsert = seeded.map(o => mapOrderToSupabasePayload(o));
-          Promise.resolve(supabase.from('royal_orders').insert(rowsToInsert)).then(res => {
-            if (res.error) {
-              Promise.resolve(supabase.from('orders').insert(rowsToInsert)).catch(() => {});
-            }
-          }).catch(() => {});
+          Promise.resolve(supabase.from('royal_orders').insert(rowsToInsert)).catch(() => {});
           return { orders: seeded, source: 'supabase' };
         }
       }
@@ -2660,7 +2640,7 @@ export async function saveOrder(order: Order, restaurantId?: string): Promise<Or
         .upsert([payload], { onConflict: 'order_id' });
 
       if (res.error) {
-        await supabase.from('orders').upsert([payload], { onConflict: 'order_id' });
+        console.warn('Supabase saveOrder upsert notice:', res.error.message);
       }
     } catch (err) {
       console.warn('Supabase saveOrder notice:', err);
@@ -2688,27 +2668,19 @@ export async function updateOrderStatus(orderId: string, status: Order['status']
   if (supabase) {
     try {
       // Primary: Use secure stored procedure kds_advance_order_status (validates restaurant_id and status enum)
-      const { data: rpcData, error: rpcError } = await supabase.rpc('kds_advance_order_status', {
+      const { error: rpcError } = await supabase.rpc('kds_advance_order_status', {
         p_order_id: orderId,
         p_restaurant_id: restaurantId,
         p_next_status: status
       });
 
       if (rpcError) {
-        // Fallback: If RPC is not yet created or fails, attempt direct UPDATE (for authenticated sessions)
-        const { error } = await supabase
+        // Direct UPDATE on royal_orders (for authenticated staff sessions)
+        await supabase
           .from('royal_orders')
           .update({ status, updated_at: new Date().toISOString() })
           .eq('order_id', orderId)
           .eq('restaurant_id', restaurantId);
-
-        if (error) {
-          await supabase
-            .from('orders')
-            .update({ status, updated_at: new Date().toISOString() })
-            .eq('order_id', orderId)
-            .eq('restaurant_id', restaurantId);
-        }
       }
     } catch (err) {
       console.warn('Supabase updateOrderStatus error:', err);
@@ -3017,15 +2989,7 @@ export async function fetchStoredPaymentsFromSupabase(
         .order('created_at', { ascending: false });
 
       if (error) {
-        const retry = await supabase
-          .from('payments')
-          .select('*')
-          .eq('restaurant_id', restaurantId)
-          .order('created_at', { ascending: false });
-        if (!retry.error) {
-          data = retry.data;
-          error = null;
-        }
+        console.warn('Supabase fetchStoredPaymentsFromSupabase notice:', error.message);
       }
 
       if (!error && data) {
@@ -3156,22 +3120,7 @@ export function savePaymentRecord(payment: Omit<PaymentRecord, 'id' | 'createdAt
         created_at: newRecord.createdAt,
         notes: newRecord.notes
       }])
-    ).then(res => {
-      if (res.error) {
-        return supabase.from('payments').insert([{
-          id: newRecord.id,
-          restaurant_id: currentRid,
-          order_id: newRecord.orderId,
-          session_id: newRecord.sessionId,
-          table_number: newRecord.tableNumber,
-          amount: newRecord.amount,
-          payment_mode: newRecord.paymentMode,
-          recorded_by: newRecord.recordedBy,
-          created_at: newRecord.createdAt,
-          notes: newRecord.notes
-        }]);
-      }
-    }).catch(() => {});
+    ).catch(() => {});
   }
 
   return newRecord;
@@ -3478,7 +3427,7 @@ export async function recordDiningSessionPayment(params: RecordPaymentParams): P
       if (paymentPayloads.length > 0) {
         const payRes = await supabase.from('royal_payments').insert(paymentPayloads);
         if (payRes.error) {
-          await supabase.from('payments').insert(paymentPayloads);
+          console.warn('Supabase recordDiningSessionPayment insert notice:', payRes.error.message);
         }
       }
 
@@ -3509,11 +3458,7 @@ export async function recordDiningSessionPayment(params: RecordPaymentParams): P
               .eq('restaurant_id', currentRestaurantId);
 
             if (res.error) {
-              await supabase
-                .from('orders')
-                .update(updatePayload)
-                .eq('order_id', id)
-                .eq('restaurant_id', currentRestaurantId);
+              console.warn('Supabase recordDiningSessionPayment update order notice:', res.error.message);
             }
           })
         );
@@ -3789,11 +3734,7 @@ export async function settleDiningSession(
               .eq('order_id', id)
               .eq('restaurant_id', restaurantId);
             if (res.error) {
-              await supabase
-                .from('orders')
-                .update(updatePayload)
-                .eq('order_id', id)
-                .eq('restaurant_id', restaurantId);
+              console.warn('Supabase settleDiningSession update order notice:', res.error.message);
             }
           })
         );
@@ -3888,15 +3829,7 @@ export async function fetchStoredFeedbackFromSupabase(
         .order('created_at', { ascending: false });
 
       if (error) {
-        const retry = await supabase
-          .from('feedback')
-          .select('*')
-          .eq('restaurant_id', restaurantId)
-          .order('created_at', { ascending: false });
-        if (!retry.error) {
-          data = retry.data;
-          error = null;
-        }
+        console.warn('Supabase fetchStoredFeedbackFromSupabase notice:', error.message);
       }
 
       if (!error && data && data.length > 0) {
@@ -4072,8 +4005,11 @@ export async function fetchRawMaterials(
 
       if (!error && data && data.length > 0) {
         const mapped: RawMaterial[] = data.map((row: any) => {
-          const qty = Number(row.quantity ?? row.Quantity ?? 0);
-          const min = Number(row.minimum_threshold ?? row.minimumThreshold ?? row.MinimumThreshold ?? 5);
+          const qty = Number(row.current_stock ?? row.quantity ?? row.Quantity ?? 0);
+          const min = Number(row.min_threshold ?? row.minimum_threshold ?? row.minimumThreshold ?? row.MinimumThreshold ?? 5);
+          const price = row.unit_cost !== undefined && row.unit_cost !== null
+            ? Number(row.unit_cost)
+            : (row.purchase_price !== undefined && row.purchase_price !== null ? Number(row.purchase_price) : undefined);
           const status: RawMaterialStockStatus = qty <= 0 ? 'OUT OF STOCK' : (qty <= min ? 'LOW STOCK' : 'IN STOCK');
           return {
             id: String(row.id),
@@ -4086,7 +4022,7 @@ export async function fetchRawMaterials(
             minimumThreshold: isNaN(min) ? 5 : min,
             reorderLevel: row.reorder_level ? Number(row.reorder_level) : min * 1.5,
             maxStock: row.max_stock ? Number(row.max_stock) : undefined,
-            purchasePrice: row.purchase_price ? Number(row.purchase_price) : undefined,
+            purchasePrice: price,
             supplier: row.supplier,
             status: (row.status ?? status) as RawMaterialStockStatus,
             isActive: row.is_active !== undefined ? row.is_active : true,
@@ -4187,12 +4123,12 @@ export function saveRawMaterial(
       sku: savedItem.sku,
       name: savedItem.name,
       category: savedItem.category,
-      quantity: savedItem.quantity,
+      current_stock: savedItem.quantity,
       unit: savedItem.unit,
-      minimum_threshold: savedItem.minimumThreshold,
+      min_threshold: savedItem.minimumThreshold,
       reorder_level: savedItem.reorderLevel,
       max_stock: savedItem.maxStock,
-      purchase_price: savedItem.purchasePrice,
+      unit_cost: savedItem.purchasePrice,
       supplier: savedItem.supplier,
       status: savedItem.status,
       is_active: savedItem.isActive,
@@ -4322,6 +4258,29 @@ export async function fetchStockMovements(
   return { movements: getStoredStockMovements(restaurantId), source: 'local' };
 }
 
+export function mapMovementTypeToDb(type: string): DbStockMovementType {
+  const norm = (type || '').toUpperCase().trim();
+  switch (norm) {
+    case 'PURCHASE':
+    case 'OPENING_STOCK':
+    case 'RETURN':
+    case 'ADD':
+      return 'add';
+    case 'SALE_CONSUMPTION':
+    case 'REDUCE':
+    case 'DEDUCT':
+      return 'deduct';
+    case 'WASTAGE':
+    case 'WASTE':
+      return 'waste';
+    case 'ADJUSTMENT':
+    case 'SET':
+    case 'AUDIT_RESET':
+    default:
+      return 'audit_reset';
+  }
+}
+
 export async function updateRawMaterialStock(params: {
   rawMaterialId: string;
   action: StockMovementType;
@@ -4421,9 +4380,9 @@ export async function updateRawMaterialStock(params: {
       supabase
         .from('raw_materials')
         .update({
-          quantity: newQty,
+          current_stock: newQty,
           status,
-          purchase_price: updatedItem.purchasePrice,
+          unit_cost: updatedItem.purchasePrice,
           updated_at: updatedItem.updatedAt,
           last_updated_by: updatedItem.lastUpdatedBy
         })
@@ -4439,7 +4398,7 @@ export async function updateRawMaterialStock(params: {
           restaurant_id: restaurantId,
           raw_material_id: newMovement.rawMaterialId,
           raw_material_name: newMovement.rawMaterialName,
-          movement_type: newMovement.movementType,
+          movement_type: mapMovementTypeToDb(newMovement.movementType),
           quantity_change: newMovement.quantityChange,
           previous_quantity: newMovement.previousQuantity,
           new_quantity: newMovement.newQuantity,
