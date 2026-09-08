@@ -41,21 +41,23 @@ export const Header: React.FC<HeaderProps> = ({
       <div className="bg-[#f7f3ed] border-b border-[#e5e1da] px-3 py-1.5 text-xs text-[#1a1a1a]">
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
-            <button
-              id="supabase-status-btn"
-              onClick={onOpenSupabaseSettings}
-              className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full font-medium transition-all text-[11px] ${
-                supabaseConnected
-                  ? 'bg-emerald-50 text-emerald-800 border border-emerald-300 hover:bg-emerald-100'
-                  : 'bg-amber-50 text-[#5c1b1b] border border-[#d4af37]/40 hover:bg-amber-100'
-              }`}
-              title="Click to configure Supabase Database"
-            >
-              <span className={`w-2 h-2 rounded-full ${supabaseConnected ? 'bg-emerald-500 animate-pulse' : 'bg-[#d4af37]'}`} />
-              <Database className="w-3 h-3 text-[#5c1b1b]" />
-              <span className="hidden sm:inline">Database:</span>
-              <span className="font-semibold">{supabaseConnected ? 'Supabase Connected' : 'Demo DB Mode'}</span>
-            </button>
+            {isStaffAuthenticated && currentView !== 'customer' && (
+              <button
+                id="supabase-status-btn"
+                onClick={onOpenSupabaseSettings}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full font-medium transition-all text-[11px] ${
+                  supabaseConnected
+                    ? 'bg-emerald-50 text-emerald-800 border border-emerald-300 hover:bg-emerald-100'
+                    : 'bg-amber-50 text-[#5c1b1b] border border-[#d4af37]/40 hover:bg-amber-100'
+                }`}
+                title="Click to configure Supabase Database"
+              >
+                <span className={`w-2 h-2 rounded-full ${supabaseConnected ? 'bg-emerald-500 animate-pulse' : 'bg-[#d4af37]'}`} />
+                <Database className="w-3 h-3 text-[#5c1b1b]" />
+                <span className="hidden sm:inline">Database:</span>
+                <span className="font-semibold">{supabaseConnected ? 'Supabase Connected' : 'Demo DB Mode'}</span>
+              </button>
+            )}
 
             <button
               id="refresh-menu-btn"

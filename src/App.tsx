@@ -316,16 +316,27 @@ export default function App() {
   const activeTableSessionOrders = useMemo(() => {
     if (isTableTampered) return [];
     if (!activeOrders || activeOrders.length === 0) return [];
+
+    // Verified customer session ID if present in storage
+    let currentSessionId: string | null = null;
+    try {
+      const rid = getCurrentRestaurantId();
+      currentSessionId = sessionStorage.getItem(`rbh_customer_session_id_${rid}`) || sessionStorage.getItem('rbh_customer_session_id');
+    } catch {}
+
     return activeOrders
-      .filter(
-        o => o.tableNumber.toLowerCase() === tableNumber.toLowerCase() && 
-        o.status !== 'Cancelled' && 
-        o.paymentStatus !== 'Paid' &&
-        (o.remainingAmount === undefined || o.remainingAmount > 0.05) &&
-        !o.is_archived
-      )
+      .filter(o => {
+        if (o.tableNumber.toLowerCase() !== tableNumber.toLowerCase()) return false;
+        if (o.status === 'Cancelled' || o.paymentStatus === 'Paid' || o.is_archived) return false;
+        if (o.remainingAmount !== undefined && o.remainingAmount <= 0.05) return false;
+
+        // Strict customer session privacy: must match tracked active order or verified session ID
+        if (activeCustomerOrderId && o.id === activeCustomerOrderId) return true;
+        if (currentSessionId && o.sessionId === currentSessionId) return true;
+        return false;
+      })
       .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
-  }, [activeOrders, tableNumber, isTableTampered]);
+  }, [activeOrders, tableNumber, isTableTampered, activeCustomerOrderId]);
 
   const customerActiveOrder = useMemo(() => {
     if (isTableTampered) return null;
@@ -342,25 +353,26 @@ export default function App() {
       if (found) return found;
     }
 
-    // Second priority: most recent active order for this table session (New, Preparing, or Ready) and not Paid
-    const tableActive = activeOrders.find(
-      o => o.tableNumber.toLowerCase() === tableNumber.toLowerCase() && 
-      o.status !== 'Completed' && 
-      o.paymentStatus !== 'Paid' && 
-      !o.is_archived
-    );
-    if (tableActive) return tableActive;
-
-    // Third priority: any active order for this table in current session
-    if (activeTableSessionOrders.length > 0) {
-      const lastSessionOrder = activeTableSessionOrders[activeTableSessionOrders.length - 1];
-      if (lastSessionOrder.status !== 'Completed' && lastSessionOrder.paymentStatus !== 'Paid') {
-        return lastSessionOrder;
+    // Second priority: verified customer dining session placed by this browser matching order's sessionId
+    try {
+      const rid = getCurrentRestaurantId();
+      const currentSessionId = sessionStorage.getItem(`rbh_customer_session_id_${rid}`) || sessionStorage.getItem('rbh_customer_session_id');
+      if (currentSessionId) {
+        const sessionOrders = activeOrders.filter(
+          o => o.sessionId === currentSessionId &&
+          o.tableNumber.toLowerCase() === tableNumber.toLowerCase() &&
+          o.status !== 'Completed' &&
+          o.paymentStatus !== 'Paid' &&
+          !o.is_archived
+        );
+        if (sessionOrders.length > 0) {
+          return sessionOrders[sessionOrders.length - 1];
+        }
       }
-    }
+    } catch {}
 
     return null;
-  }, [activeOrders, activeCustomerOrderId, tableNumber, activeTableSessionOrders, isTableTampered]);
+  }, [activeOrders, activeCustomerOrderId, tableNumber, isTableTampered]);
 
   const customerCompletedOrder = useMemo(() => {
     if (!activeOrders || activeOrders.length === 0) return null;
@@ -766,7 +778,11 @@ export default function App() {
         activeOrdersCount={pendingOrdersCount}
         pendingBillsCount={pendingBillsCount}
         supabaseConnected={isSupabaseConnected}
-        onOpenSupabaseSettings={() => setIsSupabaseSettingsOpen(true)}
+        onOpenSupabaseSettings={() => {
+          if (staffRole !== 'none') {
+            setIsSupabaseSettingsOpen(true);
+          }
+        }}
         onOpenQrModal={() => setIsQrModalOpen(true)}
         onRefreshMenu={loadMenu}
         isRefreshing={isRefreshing}
@@ -1031,14 +1047,14 @@ export default function App() {
                   <span className="w-2 h-2 rounded-full bg-emerald-600 animate-pulse" />
                   Live Supabase Menu
                 </span>
-              ) : (
+              ) : staffRole !== 'none' ? (
                 <button
                   onClick={() => setIsSupabaseSettingsOpen(true)}
                   className="text-[11px] text-[#5c1b1b] hover:text-[#d4af37] font-semibold underline flex items-center gap-1"
                 >
                   <span>Connect Supabase DB</span>
                 </button>
-              )}
+              ) : null}
             </div>
 
             {isLoadingMenu ? (
@@ -1188,7 +1204,7 @@ export default function App() {
 
       {/* Supabase Database Settings Modal */}
       <SupabaseSettingsModal
-        isOpen={isSupabaseSettingsOpen}
+        isOpen={isSupabaseSettingsOpen && staffRole !== 'none'}
         onClose={() => setIsSupabaseSettingsOpen(false)}
         onConfigSaved={loadMenu}
         isConnected={isSupabaseConnected}

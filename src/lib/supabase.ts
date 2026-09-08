@@ -368,12 +368,13 @@ export async function signInStaff(
         // Authenticated with Supabase Auth! Now resolve database-backed staff allowlist or staff role
         let staffProfile: StaffProfile | null = null;
 
-        // Try querying staff_profiles allowlist table
+        // Try querying staff_profiles allowlist table strictly for this user and restaurant
         try {
           const { data: staffData, error: staffError } = await supabase
             .from('staff_profiles')
             .select('*')
             .or(`id.eq.${data.user.id},email.ilike.${cleanEmail}`)
+            .eq('restaurant_id', targetRestId)
             .eq('is_active', true)
             .maybeSingle();
 
@@ -385,11 +386,11 @@ export async function signInStaff(
             const normalizedRole = staffData.role?.toLowerCase() || 'counter';
             staffProfile = {
               id: staffData.id || data.user.id,
-              restaurant_id: targetRestId,
+              restaurant_id: staffData.restaurant_id || targetRestId,
               email: staffData.email || data.user.email || cleanEmail,
               role: normalizedRole === 'kitchen' || normalizedRole === 'chef' ? 'kitchen' : (normalizedRole.includes('admin') ? 'admin' : (normalizedRole.includes('manager') ? 'manager' : 'counter')),
               is_active: true,
-              full_name: staffData.full_name || (cleanEmail.includes('chef') ? 'Ustad Mohammed (Head Chef)' : 'Farhan Ali (Store Manager)'),
+              full_name: staffData.full_name || 'Staff Member',
               created_at: staffData.created_at,
               updated_at: staffData.updated_at
             };
@@ -398,63 +399,18 @@ export async function signInStaff(
           console.warn('Could not query staff_profiles table:', e);
         }
 
-        // If no explicit DB profile found, check if this is an authorized staff account
-        if (!staffProfile) {
-          const userMetaRole = data.user.user_metadata?.role || data.user.app_metadata?.role;
-          const isKnownStaff = cleanEmail.endsWith('@royalbiryani.com') || Boolean(userMetaRole) || cleanEmail.includes('staff');
-
-          if (isKnownStaff) {
-            let role: 'kitchen' | 'counter' | 'admin' | 'manager' = 'manager';
-            let fullName = 'Farhan Ali (Store Manager)';
-
-            if (cleanEmail.includes('chef') || cleanEmail.includes('kitchen') || userMetaRole === 'kitchen') {
-              role = 'kitchen';
-              fullName = 'Ustad Mohammed (Head Chef)';
-            } else if (cleanEmail.includes('admin') || userMetaRole === 'admin') {
-              role = 'admin';
-              fullName = 'Farhan Ali (Administrator)';
-            } else if (cleanEmail.includes('counter') || userMetaRole === 'counter') {
-              role = 'counter';
-              fullName = 'Farhan Ali (Billing Counter)';
-            }
-
-            staffProfile = {
-              id: data.user.id,
-              restaurant_id: targetRestId,
-              email: cleanEmail,
-              role,
-              is_active: true,
-              full_name: fullName
-            };
-
-            // Attempt to write/update staff_profiles record in Supabase
-            try {
-              await supabase.from('staff_profiles').upsert({
-                id: data.user.id,
-                restaurant_id: targetRestId,
-                email: cleanEmail,
-                role,
-                full_name: fullName,
-                is_active: true
-              });
-            } catch {
-              // RLS might block client insert, which is safe to ignore
-            }
-          }
-        }
-
         if (staffProfile) {
           saveCurrentStaffProfile(staffProfile);
           return { user: data.user, profile: staffProfile, error: undefined };
         }
 
-        // Authenticated in Supabase Auth but not recognized as a staff member
+        // Authenticated in Supabase Auth but not recognized as an authorized staff member for this restaurant
         await supabase.auth.signOut();
         saveCurrentStaffProfile(null);
         return { 
           user: null, 
           profile: null, 
-          error: `User "${cleanEmail}" is authenticated with Supabase, but is not an authorized staff member for restaurant "${targetRestId}". Contact your manager.` 
+          error: `User "${cleanEmail}" is authenticated with Supabase, but has no authorized staff profile for restaurant "${targetRestId}". Please contact your administrator.`
         };
       }
     } catch (err: any) {
@@ -544,30 +500,20 @@ export async function getStaffSession(restaurantId: string = getCurrentRestauran
           .from('staff_profiles')
           .select('*')
           .or(`id.eq.${data.session.user.id},email.ilike.${userEmail}`)
+          .eq('restaurant_id', targetRestId)
           .eq('is_active', true)
           .maybeSingle();
 
         if (staffData) {
           const profile: StaffProfile = {
             id: staffData.id || data.session.user.id,
-            restaurant_id: targetRestId,
+            restaurant_id: staffData.restaurant_id || targetRestId,
             email: staffData.email || data.session.user.email || '',
             role: staffData.role,
             is_active: staffData.is_active,
             full_name: staffData.full_name,
             created_at: staffData.created_at,
             updated_at: staffData.updated_at
-          };
-          saveCurrentStaffProfile(profile);
-          return { user: data.session.user, profile };
-        } else if (userEmail.endsWith('@royalbiryani.com')) {
-          const profile: StaffProfile = {
-            id: data.session.user.id,
-            restaurant_id: targetRestId,
-            email: userEmail,
-            role: userEmail.includes('chef') ? 'kitchen' : 'manager',
-            is_active: true,
-            full_name: userEmail.includes('chef') ? 'Ustad Mohammed (Head Chef)' : 'Farhan Ali (Store Manager)'
           };
           saveCurrentStaffProfile(profile);
           return { user: data.session.user, profile };
@@ -2921,10 +2867,13 @@ function initGlobalRealtimeIfNeeded() {
   };
 
   const handleStorageEvent = (event: StorageEvent) => {
-    if (event.key === ORDERS_STORAGE_KEY || event.key === CUSTOMER_ACTIVE_ORDER_KEY) {
+    const currentRid = getCurrentRestaurantId();
+    const tenantOrdersKey = getTenantStorageKey(ORDERS_STORAGE_KEY, currentRid);
+    const tenantFeedbackKey = getTenantStorageKey(FEEDBACK_STORAGE_KEY, currentRid);
+    if (event.key === ORDERS_STORAGE_KEY || event.key === tenantOrdersKey || event.key === CUSTOMER_ACTIVE_ORDER_KEY) {
       notifyRealtimeListeners();
     }
-    if (event.key === FEEDBACK_STORAGE_KEY) {
+    if (event.key === FEEDBACK_STORAGE_KEY || event.key === tenantFeedbackKey) {
       safeDispatchEvent(new CustomEvent('rbh_feedback_updated'));
     }
   };
@@ -2943,19 +2892,25 @@ function initGlobalRealtimeIfNeeded() {
   const supabase = getSupabaseClient();
   if (supabase && !singletonSupabaseChannel) {
     try {
-      const channelName = getOrdersRealtimeChannelName(getCurrentRestaurantId());
+      const currentRid = getCurrentRestaurantId();
+      const channelName = getOrdersRealtimeChannelName(currentRid);
       singletonSupabaseChannel = supabase
         .channel(channelName)
         .on(
           'postgres_changes',
-          { event: '*', schema: 'public', table: 'royal_orders' },
+          {
+            event: '*',
+            schema: 'public',
+            table: 'royal_orders',
+            filter: `restaurant_id=eq.${currentRid}`
+          },
           (payload: any) => {
             if (payload.new && payload.new.order_id && payload.new.status) {
-              const current = getStoredOrders();
+              const current = getStoredOrders(currentRid);
               const exists = current.find(o => o.id === payload.new.order_id);
               if (exists && exists.status !== payload.new.status) {
                 const updated = current.map(o => o.id === payload.new.order_id ? { ...o, status: payload.new.status } : o);
-                safeStorage.setItem(ORDERS_STORAGE_KEY, JSON.stringify(updated));
+                saveStoredOrders(updated, currentRid);
               }
             }
             notifyRealtimeListeners();
@@ -2963,11 +2918,11 @@ function initGlobalRealtimeIfNeeded() {
         )
         .on('broadcast', { event: 'order_status_updated' }, (payload: any) => {
           if (payload.payload && payload.payload.orderId && payload.payload.status) {
-            const current = getStoredOrders();
+            const current = getStoredOrders(currentRid);
             const exists = current.find(o => o.id === payload.payload.orderId);
             if (exists && exists.status !== payload.payload.status) {
               const updated = current.map(o => o.id === payload.payload.orderId ? { ...o, status: payload.payload.status } : o);
-              safeStorage.setItem(ORDERS_STORAGE_KEY, JSON.stringify(updated));
+              saveStoredOrders(updated, currentRid);
             }
           }
           notifyRealtimeListeners();
@@ -3924,13 +3879,14 @@ export function mapSupabaseRowToFeedback(row: Record<string, any>): CustomerFeed
 export async function fetchStoredFeedbackFromSupabase(
   restaurantId: string = getCurrentRestaurantId()
 ): Promise<{ feedbacks: CustomerFeedback[]; source: 'supabase' | 'local' }> {
+  const targetRestId = (restaurantId || getCurrentRestaurantId()).trim().toLowerCase() || DEFAULT_RESTAURANT_ID;
   const supabase = getSupabaseClient();
   if (supabase) {
     try {
       let { data, error } = await supabase
         .from('customer_feedback')
         .select('*')
-        .eq('restaurant_id', restaurantId)
+        .eq('restaurant_id', targetRestId)
         .order('created_at', { ascending: false });
 
       if (error) {
@@ -3939,7 +3895,8 @@ export async function fetchStoredFeedbackFromSupabase(
 
       if (!error && data && data.length > 0) {
         const mapped = data.map(mapSupabaseRowToFeedback);
-        safeStorage.setItem(FEEDBACK_STORAGE_KEY, JSON.stringify(mapped));
+        const tenantKey = getTenantStorageKey(FEEDBACK_STORAGE_KEY, targetRestId);
+        safeStorage.setItem(tenantKey, JSON.stringify(mapped));
         return { feedbacks: mapped, source: 'supabase' };
       }
     } catch (e) {
@@ -3947,30 +3904,51 @@ export async function fetchStoredFeedbackFromSupabase(
     }
   }
 
-  return { feedbacks: getStoredFeedback(), source: 'local' };
+  return { feedbacks: getStoredFeedback(targetRestId), source: 'local' };
 }
 
-export function getStoredFeedback(): CustomerFeedback[] {
+export function getStoredFeedback(restaurantId: string = getCurrentRestaurantId()): CustomerFeedback[] {
+  const targetRestId = (restaurantId || getCurrentRestaurantId()).trim().toLowerCase() || DEFAULT_RESTAURANT_ID;
+  const tenantKey = getTenantStorageKey(FEEDBACK_STORAGE_KEY, targetRestId);
   try {
-    const saved = safeStorage.getItem(FEEDBACK_STORAGE_KEY);
+    const saved = safeStorage.getItem(tenantKey);
     if (saved) {
       const parsed = JSON.parse(saved);
       if (Array.isArray(parsed) && parsed.length > 0) {
         return parsed;
       }
     }
+    // Backward compatibility & migration for default tenant if un-scoped key exists
+    if (targetRestId === DEFAULT_RESTAURANT_ID) {
+      const legacySaved = safeStorage.getItem(FEEDBACK_STORAGE_KEY);
+      if (legacySaved) {
+        const parsed = JSON.parse(legacySaved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          safeStorage.setItem(tenantKey, legacySaved);
+          return parsed;
+        }
+      }
+    }
   } catch (e) {
     console.error('Failed to parse customer feedbacks', e);
   }
 
-  safeStorage.setItem(FEEDBACK_STORAGE_KEY, JSON.stringify(INITIAL_DEMO_FEEDBACKS));
+  safeStorage.setItem(tenantKey, JSON.stringify(INITIAL_DEMO_FEEDBACKS));
   return INITIAL_DEMO_FEEDBACKS;
 }
 
-export function saveCustomerFeedback(feedback: CustomerFeedback): void {
-  const current = getStoredFeedback();
+export function saveCustomerFeedback(
+  feedback: CustomerFeedback,
+  restaurantId: string = getCurrentRestaurantId()
+): void {
+  const targetRestId = (restaurantId || feedback.restaurant_id || getCurrentRestaurantId()).trim().toLowerCase() || DEFAULT_RESTAURANT_ID;
+  const current = getStoredFeedback(targetRestId);
   const updated = [feedback, ...current.filter(f => f.id !== feedback.id)];
-  safeStorage.setItem(FEEDBACK_STORAGE_KEY, JSON.stringify(updated));
+  const tenantKey = getTenantStorageKey(FEEDBACK_STORAGE_KEY, targetRestId);
+  safeStorage.setItem(tenantKey, JSON.stringify(updated));
+  if (targetRestId === DEFAULT_RESTAURANT_ID) {
+    safeStorage.setItem(FEEDBACK_STORAGE_KEY, JSON.stringify(updated));
+  }
   safeDispatchEvent(new CustomEvent('rbh_feedback_updated', { detail: feedback }));
 
   if (ordersBroadcastChannel) {
@@ -3980,12 +3958,11 @@ export function saveCustomerFeedback(feedback: CustomerFeedback): void {
   // Also push to Supabase if feedback table exists
   const supabase = getSupabaseClient();
   if (supabase) {
-    const currentRestId = getCurrentRestaurantId();
     Promise.resolve(
       supabase.from('customer_feedback').insert([{
         id: feedback.id,
         feedback_id: feedback.id,
-        restaurant_id: currentRestId,
+        restaurant_id: targetRestId,
         order_id: feedback.orderId,
         table_number: feedback.tableNumber,
         customer_name: feedback.customerName,
@@ -3998,7 +3975,7 @@ export function saveCustomerFeedback(feedback: CustomerFeedback): void {
       if (res.error) {
         return supabase.from('customer_feedback').insert([{
           id: feedback.id,
-          restaurant_id: currentRestId,
+          restaurant_id: targetRestId,
           order_id: feedback.orderId,
           table_number: feedback.tableNumber,
           customer_name: feedback.customerName,
@@ -4012,7 +3989,7 @@ export function saveCustomerFeedback(feedback: CustomerFeedback): void {
       // Silently continue
     });
 
-    const channelName = getOrdersRealtimeChannelName();
+    const channelName = getOrdersRealtimeChannelName(targetRestId);
     sendSupabaseBroadcast(channelName, 'feedback_submitted', feedback);
   }
 }
@@ -5458,7 +5435,7 @@ export function exportRestaurantDataSnapshot(restaurantId: string = getCurrentRe
     restaurantId,
     orders: getStoredOrders(restaurantId),
     payments: getStoredPayments(restaurantId),
-    feedback: getStoredFeedback(),
+    feedback: getStoredFeedback(restaurantId),
     rawMaterials: getStoredRawMaterials(),
     stockMovements: getStoredStockMovements()
   };
@@ -5475,7 +5452,10 @@ export function importRestaurantDataSnapshot(snapshot: RestaurantDataSnapshot): 
       saveStoredPayments(snapshot.payments.map(p => ({ ...p, restaurant_id: rId })), rId);
     }
     if (Array.isArray(snapshot.feedback)) {
-      safeStorage.setItem(FEEDBACK_STORAGE_KEY, JSON.stringify(snapshot.feedback));
+      safeStorage.setItem(getTenantStorageKey(FEEDBACK_STORAGE_KEY, rId), JSON.stringify(snapshot.feedback));
+      if (rId === DEFAULT_RESTAURANT_ID) {
+        safeStorage.setItem(FEEDBACK_STORAGE_KEY, JSON.stringify(snapshot.feedback));
+      }
     }
     if (Array.isArray(snapshot.rawMaterials)) {
       safeStorage.setItem(RAW_MATERIALS_STORAGE_KEY, JSON.stringify(snapshot.rawMaterials));
@@ -5489,6 +5469,25 @@ export function importRestaurantDataSnapshot(snapshot: RestaurantDataSnapshot): 
   } catch (e) {
     console.error('Failed to restore snapshot', e);
     return false;
+  }
+}
+
+export function clearTenantLocalCache(restaurantId: string = getCurrentRestaurantId()): void {
+  const targetRestId = (restaurantId || getCurrentRestaurantId()).trim().toLowerCase() || DEFAULT_RESTAURANT_ID;
+  safeStorage.removeItem(getTenantStorageKey(ORDERS_STORAGE_KEY, targetRestId));
+  safeStorage.removeItem(getTenantStorageKey(PAYMENTS_STORAGE_KEY, targetRestId));
+  safeStorage.removeItem(getTenantStorageKey(FEEDBACK_STORAGE_KEY, targetRestId));
+  safeStorage.removeItem(getTenantStorageKey(RAW_MATERIALS_STORAGE_KEY, targetRestId));
+  safeStorage.removeItem(getTenantStorageKey(STOCK_MOVEMENTS_STORAGE_KEY, targetRestId));
+  safeStorage.removeItem(getTenantStorageKey(MENU_RECIPES_STORAGE_KEY, targetRestId));
+  safeStorage.removeItem(getTenantStorageKey(INVENTORY_PURCHASES_STORAGE_KEY, targetRestId));
+  safeStorage.removeItem(getTenantStorageKey(INVENTORY_WASTAGE_STORAGE_KEY, targetRestId));
+  safeStorage.removeItem(getTenantStorageKey(CONSUMED_ORDERS_STORAGE_KEY, targetRestId));
+  safeStorage.removeItem(getTenantStorageKey(RESTAURANT_SETTINGS_STORAGE_KEY, targetRestId));
+  safeStorage.removeItem(getTenantStorageKey(RESTAURANT_TABLES_STORAGE_KEY, targetRestId));
+  safeStorage.removeItem(getTenantStorageKey(MENU_AVAILABILITY_MAP_KEY, targetRestId));
+  if (targetRestId === DEFAULT_RESTAURANT_ID) {
+    safeStorage.removeItem(FEEDBACK_STORAGE_KEY);
   }
 }
 
