@@ -365,7 +365,7 @@ export default function App() {
   const customerCompletedOrder = useMemo(() => {
     if (!activeOrders || activeOrders.length === 0) return null;
 
-    // First priority: the explicitly tracked active order if completed/paid
+    // 1. Explicitly tracked active order placed by this browser if completed/paid
     if (activeCustomerOrderId) {
       const found = activeOrders.find(
         o => o.id === activeCustomerOrderId && (o.status === 'Completed' || o.paymentStatus === 'Paid')
@@ -373,15 +373,20 @@ export default function App() {
       if (found) return found;
     }
 
-    // Second priority: order completed for this table recently (within last 15 minutes)
-    const now = Date.now();
-    const tableCompleted = activeOrders.find(
-      o => o.tableNumber.toLowerCase() === tableNumber.toLowerCase() && 
-      (o.status === 'Completed' || o.paymentStatus === 'Paid') &&
-      (now - new Date(o.createdAt).getTime() < 15 * 60 * 1000)
-    );
-    return tableCompleted || null;
-  }, [activeOrders, activeCustomerOrderId, tableNumber]);
+    // 2. Verified dining session placed by this browser matching order's sessionId
+    try {
+      const rid = getCurrentRestaurantId();
+      const currentSessionId = sessionStorage.getItem(`rbh_customer_session_id_${rid}`) || sessionStorage.getItem('rbh_customer_session_id');
+      if (currentSessionId) {
+        const foundInSession = activeOrders.find(
+          o => o.sessionId === currentSessionId && (o.status === 'Completed' || o.paymentStatus === 'Paid')
+        );
+        if (foundInSession) return foundInSession;
+      }
+    } catch {}
+
+    return null;
+  }, [activeOrders, activeCustomerOrderId]);
 
   // 3. Fetch menu items from Supabase or default
   const loadMenu = useCallback(async () => {
@@ -410,11 +415,19 @@ export default function App() {
     const handleMenuUpdated = () => {
       loadMenu();
     };
+
+    const handleOnline = () => {
+      loadOrders();
+      loadMenu();
+    };
+
     window.addEventListener('rbh_menu_updated', handleMenuUpdated);
+    window.addEventListener('online', handleOnline);
     return () => {
       window.removeEventListener('rbh_menu_updated', handleMenuUpdated);
+      window.removeEventListener('online', handleOnline);
     };
-  }, [loadMenu]);
+  }, [loadMenu, loadOrders]);
 
   // Categories list dynamically derived from loaded menu items
   const categories = useMemo(() => {
@@ -592,8 +605,14 @@ export default function App() {
       };
 
       // Save to persistence (throws if Supabase database rejects)
-      await saveOrder(newOrder);
-      setActiveCustomerOrderId(newOrder.id);
+      const persistedOrder = await saveOrder(newOrder);
+      setActiveCustomerOrderId(persistedOrder.id);
+      try {
+        if (persistedOrder.sessionId) {
+          sessionStorage.setItem(`rbh_customer_session_id_${rid}`, persistedOrder.sessionId);
+          sessionStorage.setItem('rbh_customer_session_id', persistedOrder.sessionId);
+        }
+      } catch {}
       await loadOrders();
 
       // Reset cart and show confirmation modal only upon successful persistence
@@ -1161,6 +1180,8 @@ export default function App() {
             const rid = getCurrentRestaurantId();
             sessionStorage.removeItem(`rbh_verified_table_${rid}`);
             sessionStorage.removeItem(`rbh_table_token_${rid}`);
+            sessionStorage.removeItem(`rbh_customer_session_id_${rid}`);
+            sessionStorage.removeItem('rbh_customer_session_id');
           } catch {}
         }}
       />

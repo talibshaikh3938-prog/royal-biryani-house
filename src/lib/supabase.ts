@@ -1178,21 +1178,6 @@ export async function saveRestaurantSettings(settings: RestaurantSettings): Prom
     updated_at: new Date().toISOString()
   };
 
-  try {
-    safeStorage.setItem(`${RESTAURANT_SETTINGS_STORAGE_KEY}_${restaurantId}`, JSON.stringify(payload));
-    safeStorage.setItem(RESTAURANT_SETTINGS_STORAGE_KEY, JSON.stringify(payload));
-  } catch (e) {
-    console.error('Failed to save settings to localStorage', e);
-  }
-
-  // Broadcast & event dispatch
-  if (ordersBroadcastChannel) {
-    try {
-      ordersBroadcastChannel.postMessage({ type: 'RESTAURANT_SETTINGS_CHANGED', restaurantId, settings: payload });
-    } catch {}
-  }
-  safeDispatchEvent(new CustomEvent('rbh_restaurant_settings_changed', { detail: payload }));
-
   const supabase = getSupabaseClient();
   if (supabase) {
     try {
@@ -1222,12 +1207,29 @@ export async function saveRestaurantSettings(settings: RestaurantSettings): Prom
         .upsert(dbPayload, { onConflict: 'restaurant_id' });
 
       if (error) {
-        console.warn('Supabase upsert restaurant_settings failed:', error.message);
+        console.error('Supabase upsert restaurant_settings failed:', error.message);
+        return { success: false, settings: payload, error: error.message };
       }
     } catch (e: any) {
-      console.warn('Supabase restaurant_settings error:', e.message);
+      console.error('Supabase restaurant_settings error:', e.message);
+      return { success: false, settings: payload, error: e.message || 'Database error while saving restaurant settings' };
     }
   }
+
+  try {
+    safeStorage.setItem(`${RESTAURANT_SETTINGS_STORAGE_KEY}_${restaurantId}`, JSON.stringify(payload));
+    safeStorage.setItem(RESTAURANT_SETTINGS_STORAGE_KEY, JSON.stringify(payload));
+  } catch (e) {
+    console.error('Failed to save settings to localStorage', e);
+  }
+
+  // Broadcast & event dispatch
+  if (ordersBroadcastChannel) {
+    try {
+      ordersBroadcastChannel.postMessage({ type: 'RESTAURANT_SETTINGS_CHANGED', restaurantId, settings: payload });
+    } catch {}
+  }
+  safeDispatchEvent(new CustomEvent('rbh_restaurant_settings_changed', { detail: payload }));
 
   return { success: true, settings: payload };
 }
@@ -1327,6 +1329,7 @@ export async function saveRestaurantTable(table: Partial<RestaurantTable>): Prom
   const qrToken = table.qr_token || generateTableQrToken(tableNum, restaurantId);
 
   let target: RestaurantTable;
+  let targetTables: RestaurantTable[];
   if (table.id && tables.some(t => t.id === table.id)) {
     target = {
       ...tables.find(t => t.id === table.id)!,
@@ -1336,8 +1339,7 @@ export async function saveRestaurantTable(table: Partial<RestaurantTable>): Prom
       restaurant_id: restaurantId,
       updated_at: now
     } as RestaurantTable;
-    const updated = tables.map(t => t.id === table.id ? target : t);
-    saveStoredRestaurantTables(updated, restaurantId);
+    targetTables = tables.map(t => t.id === table.id ? target : t);
   } else {
     const newId = table.id || `tbl-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
     target = {
@@ -1353,17 +1355,8 @@ export async function saveRestaurantTable(table: Partial<RestaurantTable>): Prom
       created_at: now,
       updated_at: now
     };
-    tables.push(target);
-    saveStoredRestaurantTables(tables, restaurantId);
+    targetTables = [...tables, target];
   }
-
-  // Broadcast & events
-  if (ordersBroadcastChannel) {
-    try {
-      ordersBroadcastChannel.postMessage({ type: 'RESTAURANT_TABLES_CHANGED', restaurantId, table: target });
-    } catch {}
-  }
-  safeDispatchEvent(new CustomEvent('rbh_restaurant_tables_changed', { detail: target }));
 
   const supabase = getSupabaseClient();
   if (supabase) {
@@ -1380,11 +1373,26 @@ export async function saveRestaurantTable(table: Partial<RestaurantTable>): Prom
         qr_code_url: target.qrCodeUrl || null,
         updated_at: now
       };
-      await supabase.from('restaurant_tables').upsert(dbPayload, { onConflict: 'id' });
-    } catch (e) {
-      console.warn('Supabase saveRestaurantTable failed', e);
+      const { error } = await supabase.from('restaurant_tables').upsert(dbPayload, { onConflict: 'id' });
+      if (error) {
+        console.error('Supabase saveRestaurantTable failed:', error.message);
+        return { success: false, table: target, error: error.message };
+      }
+    } catch (e: any) {
+      console.error('Supabase saveRestaurantTable error:', e.message);
+      return { success: false, table: target, error: e.message || 'Database error while saving table' };
     }
   }
+
+  saveStoredRestaurantTables(targetTables, restaurantId);
+
+  // Broadcast & events
+  if (ordersBroadcastChannel) {
+    try {
+      ordersBroadcastChannel.postMessage({ type: 'RESTAURANT_TABLES_CHANGED', restaurantId, table: target });
+    } catch {}
+  }
+  safeDispatchEvent(new CustomEvent('rbh_restaurant_tables_changed', { detail: target }));
 
   return { success: true, table: target };
 }
@@ -2491,17 +2499,41 @@ export async function fetchStoredOrdersFromSupabase(
             const localOrder = currentLocal.find(l => l.id === remoteOrder.id);
             if (!localOrder) return remoteOrder;
 
-            const useLocalStatus = getStatusRank(localOrder.status) > getStatusRank(remoteOrder.status);
+            const useLocalStatus = remoteOrder.status !== 'Cancelled' && getStatusRank(localOrder.status) > getStatusRank(remoteOrder.status);
+
+            const resolvedTotal = remoteOrder.total !== undefined ? remoteOrder.total : (localOrder.total || 0);
+
+            // Authoritative remote financial precedence: remote Supabase values take precedence whenever present
+            const resolvedPaidAmount = remoteOrder.paidAmount !== undefined
+              ? remoteOrder.paidAmount
+              : (localOrder.paidAmount !== undefined ? localOrder.paidAmount : 0);
+
+            const resolvedRemaining = remoteOrder.remainingAmount !== undefined
+              ? remoteOrder.remainingAmount
+              : (
+                  localOrder.remainingAmount !== undefined
+                    ? localOrder.remainingAmount
+                    : Math.max(0, resolvedTotal - resolvedPaidAmount)
+                );
+
+            const resolvedPaymentStatus: Order['paymentStatus'] =
+              remoteOrder.paymentStatus !== undefined
+                ? ((resolvedRemaining <= 0.05 && resolvedTotal > 0 && resolvedPaidAmount > 0)
+                    ? 'Paid'
+                    : (remoteOrder.paymentStatus as Order['paymentStatus']))
+                : (localOrder.paymentStatus || 'Pending');
+
             return {
               ...remoteOrder,
               sessionId: remoteOrder.sessionId || localOrder.sessionId,
               round: remoteOrder.round || localOrder.round || 1,
               isAddon: remoteOrder.isAddon !== undefined ? remoteOrder.isAddon : localOrder.isAddon,
+              total: resolvedTotal,
               status: useLocalStatus ? localOrder.status : remoteOrder.status,
-              paymentStatus: localOrder.paymentStatus === 'Paid' ? 'Paid' : (remoteOrder.paymentStatus || localOrder.paymentStatus),
-              paidAmount: localOrder.paidAmount !== undefined ? Math.max(localOrder.paidAmount, remoteOrder.paidAmount || 0) : remoteOrder.paidAmount,
-              remainingAmount: localOrder.remainingAmount !== undefined ? localOrder.remainingAmount : remoteOrder.remainingAmount,
-              paymentHistory: localOrder.paymentHistory || remoteOrder.paymentHistory
+              paymentStatus: resolvedPaymentStatus,
+              paidAmount: resolvedPaidAmount,
+              remainingAmount: resolvedRemaining,
+              paymentHistory: (remoteOrder.paymentHistory && remoteOrder.paymentHistory.length > 0) ? remoteOrder.paymentHistory : (localOrder.paymentHistory || remoteOrder.paymentHistory)
             };
           });
 
@@ -3344,16 +3376,19 @@ export async function recordDiningSessionPayment(params: RecordPaymentParams): P
   const paymentPayloads: any[] = [];
 
   validSplits.forEach((split) => {
-    const rec = savePaymentRecord({
+    const recId = `PAY-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+    const rec: PaymentRecord = {
+      id: recId,
+      restaurant_id: currentRestaurantId,
       orderId: matchingOrders[0]?.id,
       sessionId: targetSessionId || matchingOrders[0]?.sessionId,
       tableNumber: targetTableNumber || matchingOrders[0]?.tableNumber || 'Table',
-      amount: split.amount,
+      amount: Math.round(split.amount * 100) / 100,
       paymentMode: split.mode,
+      createdAt: nowIso,
       recordedBy: params.recordedBy || 'Counter Cashier',
-      notes: params.notes,
-      restaurant_id: currentRestaurantId
-    });
+      notes: params.notes
+    };
     newPayments.push(rec);
     paymentPayloads.push({
       id: rec.id,
@@ -3415,6 +3450,59 @@ export async function recordDiningSessionPayment(params: RecordPaymentParams): P
     return o;
   });
 
+  // Push to Supabase if connected and AWAIT before committing locally
+  const supabase = getSupabaseClient();
+  if (supabase) {
+    if (paymentPayloads.length > 0) {
+      const payRes = await supabase.from('royal_payments').insert(paymentPayloads);
+      if (payRes.error) {
+        console.error('Supabase recordDiningSessionPayment insert error:', payRes.error.message);
+        throw new Error(payRes.error.message || 'Database error: failed to record payment');
+      }
+    }
+
+    if (affectedOrderIds.length > 0) {
+      const updatePromises = affectedOrderIds.map(async (id) => {
+        const ord = updatedOrders.find(o => o.id === id);
+        const updatePayload: Record<string, any> = {
+          status: isFullyPaid ? 'Completed' : ord?.status,
+          payment_status: ord ? ord.paymentStatus : (isFullyPaid ? 'Paid' : 'Pending'),
+          payment_mode: finalPaymentMode,
+          paid_amount: ord ? ord.paidAmount : (isFullyPaid ? grandTotal : newTotalPaid),
+          remaining_amount: ord ? ord.remainingAmount : (isFullyPaid ? 0 : newRemaining),
+          payment_history: allSessionPayments,
+          paid_at: isFullyPaid ? nowIso : (ord?.paidAt || undefined),
+          updated_at: nowIso
+        };
+
+        // Clean undefined keys
+        Object.keys(updatePayload).forEach(key => {
+          if (updatePayload[key] === undefined) delete updatePayload[key];
+        });
+
+        const res = await supabase
+          .from('royal_orders')
+          .update(updatePayload)
+          .eq('order_id', id)
+          .eq('restaurant_id', currentRestaurantId);
+
+        if (res.error) {
+          console.error('Supabase recordDiningSessionPayment update order error:', res.error.message);
+          throw new Error(res.error.message || 'Database error: failed to update order payment status');
+        }
+      });
+      await Promise.all(updatePromises);
+    }
+  }
+
+  // Commit locally ONLY AFTER Supabase verification succeeds (or in offline mode)
+  const currentPayments = getStoredPayments(currentRestaurantId);
+  const updatedPayments = [...newPayments, ...currentPayments.filter(p => !newPayments.some(np => np.id === p.id))];
+  saveStoredPayments(updatedPayments, currentRestaurantId);
+  newPayments.forEach(rec => {
+    safeDispatchEvent(new CustomEvent('rbh_payment_added', { detail: rec }));
+  });
+
   saveStoredOrders(updatedOrders, currentRestaurantId);
 
   // If fully paid, clear active customer tracking
@@ -3427,54 +3515,6 @@ export async function recordDiningSessionPayment(params: RecordPaymentParams): P
       }
     } catch (e) {
       // Ignore
-    }
-  }
-
-  // Push to Supabase if connected and AWAIT before triggering listeners
-  const supabase = getSupabaseClient();
-  if (supabase) {
-    try {
-      if (paymentPayloads.length > 0) {
-        const payRes = await supabase.from('royal_payments').insert(paymentPayloads);
-        if (payRes.error) {
-          console.warn('Supabase recordDiningSessionPayment insert notice:', payRes.error.message);
-        }
-      }
-
-      if (affectedOrderIds.length > 0) {
-        await Promise.all(
-          affectedOrderIds.map(async (id) => {
-            const ord = updatedOrders.find(o => o.id === id);
-            const updatePayload: Record<string, any> = {
-              status: isFullyPaid ? 'Completed' : ord?.status,
-              payment_status: ord ? ord.paymentStatus : (isFullyPaid ? 'Paid' : 'Pending'),
-              payment_mode: finalPaymentMode,
-              paid_amount: ord ? ord.paidAmount : (isFullyPaid ? grandTotal : newTotalPaid),
-              remaining_amount: ord ? ord.remainingAmount : (isFullyPaid ? 0 : newRemaining),
-              payment_history: allSessionPayments,
-              paid_at: isFullyPaid ? nowIso : (ord?.paidAt || undefined),
-              updated_at: nowIso
-            };
-
-            // Clean undefined keys
-            Object.keys(updatePayload).forEach(key => {
-              if (updatePayload[key] === undefined) delete updatePayload[key];
-            });
-
-            const res = await supabase
-              .from('royal_orders')
-              .update(updatePayload)
-              .eq('order_id', id)
-              .eq('restaurant_id', currentRestaurantId);
-
-            if (res.error) {
-              console.warn('Supabase recordDiningSessionPayment update order notice:', res.error.message);
-            }
-          })
-        );
-      }
-    } catch (err) {
-      console.warn('Supabase recordDiningSessionPayment sync error:', err);
     }
   }
 
@@ -5279,9 +5319,6 @@ export function subscribeToRawMaterialsRealtime(onRawMaterialsChange: () => void
       supabaseChannel = supabase
         .channel('royal_raw_materials_realtime')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'raw_materials' }, () => {
-          onRawMaterialsChange();
-        })
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'menu_item_recipes' }, () => {
           onRawMaterialsChange();
         })
         .on('broadcast', { event: 'raw_materials_updated' }, () => {
