@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { ChefHat, Bell, Clock, MapPin, CheckCircle, ArrowRight, Check, AlertCircle, UtensilsCrossed, Volume2, Search, Filter, RefreshCw, Flame, CheckCheck, Boxes, Loader2 } from 'lucide-react';
+import { ChefHat, Bell, Clock, MapPin, CheckCircle, ArrowRight, Check, AlertCircle, UtensilsCrossed, Volume2, Search, Filter, RefreshCw, Flame, CheckCheck, Boxes, Loader2, Printer } from 'lucide-react';
 import { Order, OrderStatus, MenuItem } from '../types';
 import { playKitchenChime } from '../lib/supabase';
 import { RawMaterialsInventory } from './RawMaterialsInventory';
+import { ThermalKotModal } from './print/ThermalKotModal';
 
 interface KitchenDashboardProps {
   orders: Order[];
@@ -25,6 +26,7 @@ export const KitchenDashboard: React.FC<KitchenDashboardProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [activeTab, setActiveTab] = useState<'orders' | 'menu-stock' | 'raw-materials'>('orders');
   const [updatingOrderId, setUpdatingOrderId] = useState<string | null>(null);
+  const [selectedOrderForKot, setSelectedOrderForKot] = useState<Order | null>(null);
 
   const handleAdvanceStatus = async (orderId: string, status: OrderStatus) => {
     if (updatingOrderId) return;
@@ -373,9 +375,20 @@ export const KitchenDashboard: React.FC<KitchenDashboardProps> = ({
 
                       {/* Ticket Footer & Kitchen Actions (No pricing or billing) */}
                       <div className="p-3.5 bg-[#fdfbf7] border-t border-[#e5e1da] flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-1.5 text-xs text-stone-600 font-semibold">
-                          <UtensilsCrossed className="w-3.5 h-3.5 text-[#5c1b1b]" />
-                          <span>{totalItemsCount} {totalItemsCount === 1 ? 'dish' : 'dishes'}</span>
+                        <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-1.5 text-xs text-stone-600 font-semibold">
+                            <UtensilsCrossed className="w-3.5 h-3.5 text-[#5c1b1b]" />
+                            <span>{totalItemsCount} {totalItemsCount === 1 ? 'dish' : 'dishes'}</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setSelectedOrderForKot(order)}
+                            className="px-2 py-1 rounded-lg bg-stone-100 hover:bg-stone-200 text-stone-700 transition cursor-pointer border border-[#e5e1da] flex items-center gap-1 text-[11px] font-semibold"
+                            title="Print Kitchen Order Ticket (KOT)"
+                          >
+                            <Printer className="w-3.5 h-3.5 text-[#5c1b1b]" />
+                            <span>Print KOT</span>
+                          </button>
                         </div>
 
                         {/* Status update buttons */}
@@ -494,6 +507,13 @@ export const KitchenDashboard: React.FC<KitchenDashboardProps> = ({
           />
         )}
       </div>
+
+      {/* Thermal KOT Modal */}
+      <ThermalKotModal
+        isOpen={Boolean(selectedOrderForKot)}
+        onClose={() => setSelectedOrderForKot(null)}
+        order={selectedOrderForKot}
+      />
     </div>
   );
 };

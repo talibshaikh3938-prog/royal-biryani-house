@@ -53,6 +53,7 @@ import { ReportsAndAnalytics } from './ReportsAndAnalytics';
 import { RestaurantSettingsTab } from './RestaurantSettingsTab';
 import { TableManagementTab } from './TableManagementTab';
 import { MenuManagementTab } from './MenuManagementTab';
+import { ThermalReceiptModal, ThermalReceiptSessionData } from './print/ThermalReceiptModal';
 
 interface CounterDashboardProps {
   orders: Order[];
@@ -135,6 +136,31 @@ export const CounterDashboard: React.FC<CounterDashboardProps> = ({
   const [paymentValidationError, setPaymentValidationError] = useState<string | null>(null);
   const [isHistoryExpanded, setIsHistoryExpanded] = useState<boolean>(false);
   const [isOptionalFieldsOpen, setIsOptionalFieldsOpen] = useState<boolean>(false);
+
+  // Thermal Printing Modal State (Client-Side Only, Zero DB mutations)
+  const [activeThermalReceipt, setActiveThermalReceipt] = useState<{
+    sessionData: ThermalReceiptSessionData;
+    billType: 'bill' | 'receipt';
+  } | null>(null);
+
+  // Pure helper to map table session data into thermal printable structure
+  const buildThermalSessionData = useCallback((session: TableSessionBill, cashierName?: string): ThermalReceiptSessionData => {
+    return {
+      tableNumber: session.tableNumber,
+      sessionId: session.sessionId,
+      customerName: session.customerName,
+      orders: session.orders || [],
+      subtotal: session.subtotal,
+      tax: session.tax,
+      totalAmount: session.totalAmount,
+      paidAmount: session.paidAmount,
+      remainingAmount: session.remainingAmount,
+      paymentStatus: session.paymentStatus,
+      paymentHistory: session.paymentHistory || [],
+      startedAt: session.startedAt,
+      cashierName: cashierName || paymentStaffInput || 'Counter Cashier'
+    };
+  }, [paymentStaffInput]);
 
   // Search & Filter States
   const [orderSearchQuery, setOrderSearchQuery] = useState<string>('');
@@ -472,6 +498,34 @@ export const CounterDashboard: React.FC<CounterDashboardProps> = ({
       });
 
       if (result.isFullyPaid) {
+        // Capture completed session bill for immediate final receipt printing
+        const finalSettledReceipt: ThermalReceiptSessionData = {
+          tableNumber: session.tableNumber,
+          sessionId: session.sessionId,
+          customerName: session.customerName,
+          orders: session.orders || [],
+          subtotal: session.subtotal,
+          tax: session.tax,
+          totalAmount: session.totalAmount,
+          paidAmount: session.totalAmount,
+          remainingAmount: 0,
+          paymentStatus: 'Paid',
+          paymentHistory: [
+            ...(session.paymentHistory || []),
+            ...splitPayments.map((sp, idx) => ({
+              id: `pay_${Date.now()}_${idx}`,
+              tableNumber: session.tableNumber,
+              amount: sp.amount,
+              paymentMode: sp.mode,
+              createdAt: new Date().toISOString(),
+              recordedBy: paymentStaffInput || 'Counter Cashier',
+              notes: paymentNoteInput.trim() || undefined
+            }))
+          ],
+          startedAt: session.startedAt,
+          cashierName: paymentStaffInput || 'Counter Cashier'
+        };
+
         setSelectedSessionForPayment(null);
         if (selectedTable === session.tableNumber) {
           setSelectedTable(null);
@@ -479,6 +533,11 @@ export const CounterDashboard: React.FC<CounterDashboardProps> = ({
         setPaymentSuccessToast(
           `✓ Bill for ${session.tableNumber} fully settled! (₹${result.totalPaidNow} recorded, table closed & available)`
         );
+        // Open final customer receipt modal with print action
+        setActiveThermalReceipt({
+          sessionData: finalSettledReceipt,
+          billType: 'receipt'
+        });
       } else {
         setPaymentSuccessToast(
           `✓ Partial payment of ₹${result.totalPaidNow} recorded for ${session.tableNumber}. Remaining: ₹${result.remainingAmount}`
@@ -1346,9 +1405,25 @@ export const CounterDashboard: React.FC<CounterDashboardProps> = ({
                               'Awaiting first payment'
                             )}
                           </span>
-                          <span className="font-bold text-[#5c1b1b] flex items-center gap-1 text-[11px]">
-                            {isSelected ? 'Currently Selected' : 'Open POS →'}
-                          </span>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setActiveThermalReceipt({
+                                  sessionData: buildThermalSessionData(session),
+                                  billType: 'bill'
+                                });
+                              }}
+                              className="p-1.5 rounded-lg bg-stone-100 hover:bg-stone-200 text-stone-700 transition cursor-pointer border border-[#e5e1da]"
+                              title="Print Running Bill for Table"
+                            >
+                              <Printer className="w-3.5 h-3.5 text-[#5c1b1b]" />
+                            </button>
+                            <span className="font-bold text-[#5c1b1b] flex items-center gap-1 text-[11px]">
+                              {isSelected ? 'Currently Selected' : 'Open POS →'}
+                            </span>
+                          </div>
                         </div>
                       </div>
                     );
@@ -1368,9 +1443,25 @@ export const CounterDashboard: React.FC<CounterDashboardProps> = ({
                     )}
                   </div>
                   {selectedSessionForPayment && (
-                    <span className="px-3 py-1 rounded-full bg-[#5c1b1b] text-white text-xs font-bold serif">
-                      {selectedSessionForPayment.tableNumber}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveThermalReceipt({
+                            sessionData: buildThermalSessionData(selectedSessionForPayment),
+                            billType: 'bill'
+                          });
+                        }}
+                        className="px-2.5 py-1 rounded-lg bg-stone-100 hover:bg-stone-200 text-stone-700 text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer border border-[#e5e1da]"
+                        title="Print Running Bill for Guest"
+                      >
+                        <Printer className="w-3.5 h-3.5 text-[#5c1b1b]" />
+                        <span>Print Bill</span>
+                      </button>
+                      <span className="px-3 py-1 rounded-full bg-[#5c1b1b] text-white text-xs font-bold serif">
+                        {selectedSessionForPayment.tableNumber}
+                      </span>
+                    </div>
                   )}
                 </div>
 
@@ -2167,6 +2258,20 @@ export const CounterDashboard: React.FC<CounterDashboardProps> = ({
 
                 <div className="flex gap-2">
                   <button
+                    type="button"
+                    onClick={() => {
+                      setActiveThermalReceipt({
+                        sessionData: buildThermalSessionData(selectedTableData),
+                        billType: 'bill'
+                      });
+                    }}
+                    className="py-2.5 px-3.5 rounded-xl bg-stone-100 hover:bg-stone-200 text-stone-800 text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer border border-[#e5e1da]"
+                    title="Print Running Bill for Table"
+                  >
+                    <Printer className="w-4 h-4 text-[#5c1b1b]" />
+                    <span>Print Bill</span>
+                  </button>
+                  <button
                     onClick={() => {
                       handleOpenPaymentSession(selectedTableData);
                       setSelectedTable(null);
@@ -2311,6 +2416,14 @@ export const CounterDashboard: React.FC<CounterDashboardProps> = ({
           </div>
         </div>
       )}
+
+      {/* Thermal Customer Bill & Tax Invoice Modal */}
+      <ThermalReceiptModal
+        isOpen={Boolean(activeThermalReceipt)}
+        onClose={() => setActiveThermalReceipt(null)}
+        billType={activeThermalReceipt?.billType || 'bill'}
+        sessionData={activeThermalReceipt?.sessionData || null}
+      />
     </div>
   );
 };

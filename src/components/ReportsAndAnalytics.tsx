@@ -32,6 +32,7 @@ import {
 } from 'lucide-react';
 import { Order, MenuItem, PaymentRecord } from '../types';
 import { getStoredPayments, getPaymentsForSession, fetchStoredPaymentsFromSupabase } from '../lib/supabase';
+import { ThermalReceiptModal, ThermalReceiptSessionData } from './print/ThermalReceiptModal';
 
 interface ReportsAndAnalyticsProps {
   orders: Order[];
@@ -1327,129 +1328,36 @@ export const ReportsAndAnalytics: React.FC<ReportsAndAnalyticsProps> = ({
       )}
 
       {/* 8. ORDER RECEIPT / INVOICE DRILL-DOWN MODAL */}
-      {selectedOrderForInvoice && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-950/75 backdrop-blur-sm animate-in fade-in duration-200">
-          <div 
-            className="w-full max-w-md bg-[#fdfbf7] text-[#1a1a1a] border border-[#e5e1da] rounded-3xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {/* Invoice Header */}
-            <div className="p-4 bg-[#5c1b1b] text-white flex items-center justify-between">
-              <div>
-                <p className="text-[10px] text-[#d4af37] font-bold uppercase tracking-wider">Restaurant Tax Invoice</p>
-                <h3 className="serif text-base font-bold text-white">
-                  Order #{selectedOrderForInvoice.id}
-                </h3>
-              </div>
-              <button
-                onClick={() => setSelectedOrderForInvoice(null)}
-                className="w-7 h-7 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition cursor-pointer"
-              >
-                ✕
-              </button>
-            </div>
+      {selectedOrderForInvoice && (() => {
+        const sessionPayments = getPaymentsForSession(
+          selectedOrderForInvoice.sessionId,
+          [selectedOrderForInvoice.id]
+        );
+        const invoiceSessionData: ThermalReceiptSessionData = {
+          tableNumber: selectedOrderForInvoice.tableNumber,
+          sessionId: selectedOrderForInvoice.sessionId || selectedOrderForInvoice.id,
+          customerName: selectedOrderForInvoice.customerName,
+          orders: [selectedOrderForInvoice],
+          subtotal: selectedOrderForInvoice.subtotal,
+          tax: selectedOrderForInvoice.tax,
+          totalAmount: selectedOrderForInvoice.total,
+          paidAmount: selectedOrderForInvoice.paidAmount !== undefined ? selectedOrderForInvoice.paidAmount : selectedOrderForInvoice.total,
+          remainingAmount: selectedOrderForInvoice.remainingAmount !== undefined ? selectedOrderForInvoice.remainingAmount : 0,
+          paymentStatus: selectedOrderForInvoice.paymentStatus || 'Paid',
+          paymentHistory: sessionPayments,
+          startedAt: selectedOrderForInvoice.createdAt,
+          invoiceNumber: `INV-${selectedOrderForInvoice.id}`
+        };
 
-            {/* Receipt Body */}
-            <div className="p-5 space-y-4">
-              <div className="flex items-center justify-between text-xs pb-3 border-b border-[#e5e1da]">
-                <div>
-                  <p className="font-bold text-stone-800">{selectedOrderForInvoice.tableNumber}</p>
-                  <p className="text-[11px] text-stone-500">Customer: {selectedOrderForInvoice.customerName || 'Valued Guest'}</p>
-                </div>
-                <div className="text-right">
-                  <p className="text-stone-500 text-[11px]">
-                    {new Date(selectedOrderForInvoice.createdAt).toLocaleString('en-IN')}
-                  </p>
-                  <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold">
-                    {selectedOrderForInvoice.paymentStatus || 'Paid'} ({selectedOrderForInvoice.paymentMode || 'UPI'})
-                  </span>
-                </div>
-              </div>
-
-              {/* Items List */}
-              <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-                {selectedOrderForInvoice.items.map((item, idx) => (
-                  <div key={idx} className="flex items-center justify-between text-xs py-1 border-b border-[#e5e1da]/40">
-                    <div>
-                      <p className="font-bold text-stone-800">{item.name}</p>
-                      <p className="text-[10px] text-stone-400">
-                        ₹{item.price} × {item.quantity} {item.spiceLevel ? `• ${item.spiceLevel}` : ''}
-                      </p>
-                    </div>
-                    <p className="font-bold text-[#5c1b1b] serif">
-                      ₹{item.price * item.quantity}
-                    </p>
-                  </div>
-                ))}
-              </div>
-
-              {/* Totals */}
-              <div className="pt-2 border-t border-[#e5e1da] space-y-1.5 text-xs">
-                <div className="flex justify-between text-stone-600">
-                  <span>Subtotal:</span>
-                  <span>₹{selectedOrderForInvoice.subtotal}</span>
-                </div>
-                <div className="flex justify-between text-stone-600">
-                  <span>Restaurant GST (5%):</span>
-                  <span>₹{selectedOrderForInvoice.tax}</span>
-                </div>
-                <div className="flex justify-between text-sm font-bold text-[#5c1b1b] pt-1 border-t border-[#e5e1da]">
-                  <span>Total Amount:</span>
-                  <span className="serif text-base">₹{selectedOrderForInvoice.total}</span>
-                </div>
-              </div>
-
-              {/* Payment Records Breakdown if Split Payment exists */}
-              {(() => {
-                const sessionPayments = getPaymentsForSession(
-                  selectedOrderForInvoice.sessionId,
-                  [selectedOrderForInvoice.id]
-                );
-                if (sessionPayments.length > 0) {
-                  const paidTotal = sessionPayments.reduce((s, p) => s + (Number(p.amount) || 0), 0);
-                  return (
-                    <div className="p-2.5 rounded-xl bg-emerald-50/70 border border-emerald-200 text-xs space-y-1.5">
-                      <div className="flex justify-between items-center font-bold text-emerald-900">
-                        <span className="flex items-center gap-1">
-                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                          <span>Payment Settlement Breakdown</span>
-                        </span>
-                        <span>₹{paidTotal} Paid</span>
-                      </div>
-                      <div className="space-y-1 pt-1 border-t border-emerald-200/60">
-                        {sessionPayments.map((sp) => (
-                          <div key={sp.id} className="flex justify-between text-[11px] text-stone-700">
-                            <span className="font-semibold">{sp.paymentMode} {sp.notes ? `(${sp.notes})` : ''}</span>
-                            <span className="font-mono">₹{sp.amount}</span>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                }
-                return null;
-              })()}
-
-              {/* Modal Buttons */}
-              <div className="flex items-center gap-2 pt-2">
-                <button
-                  onClick={() => window.print()}
-                  className="flex-1 py-2.5 rounded-xl bg-[#5c1b1b] text-white text-xs font-bold transition hover:bg-[#4a1515] flex items-center justify-center gap-1.5 cursor-pointer"
-                >
-                  <Printer className="w-3.5 h-3.5 text-[#d4af37]" />
-                  <span>Print Receipt</span>
-                </button>
-                <button
-                  onClick={() => setSelectedOrderForInvoice(null)}
-                  className="py-2.5 px-4 rounded-xl bg-stone-100 text-stone-700 text-xs font-bold transition hover:bg-stone-200 cursor-pointer"
-                >
-                  Close
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+        return (
+          <ThermalReceiptModal
+            isOpen={Boolean(selectedOrderForInvoice)}
+            onClose={() => setSelectedOrderForInvoice(null)}
+            billType="receipt"
+            sessionData={invoiceSessionData}
+          />
+        );
+      })()}
     </div>
   );
 };
