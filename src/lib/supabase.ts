@@ -3260,6 +3260,7 @@ export interface RecordPaymentParams {
   splitPayments: SplitPaymentEntry[];
   recordedBy?: string;
   notes?: string;
+  idempotencyKey?: string;
 }
 
 export async function recordDiningSessionPayment(params: RecordPaymentParams): Promise<{
@@ -3371,12 +3372,16 @@ export async function recordDiningSessionPayment(params: RecordPaymentParams): P
 
   const currentRestaurantId = currentOrders[0]?.restaurant_id || getCurrentRestaurantId();
 
-  // Generate new PaymentRecords (exactly ONE per non-zero split)
+  // Generate deterministic/idempotent PaymentRecords (exactly ONE per non-zero split)
+  const cleanSessionToken = (targetSessionId || matchingOrders[0]?.id || targetTableNumber || 'TBL')
+    .replace(/[^a-zA-Z0-9_-]/g, '');
+  const baseAttemptId = params.idempotencyKey || `PAY-${currentRestaurantId}-${cleanSessionToken}-${previouslyPaid}-${totalPaidNow}`;
+
   const newPayments: PaymentRecord[] = [];
   const paymentPayloads: any[] = [];
 
-  validSplits.forEach((split) => {
-    const recId = `PAY-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
+  validSplits.forEach((split, idx) => {
+    const recId = `${baseAttemptId}-${split.mode}-${idx}`;
     const rec: PaymentRecord = {
       id: recId,
       restaurant_id: currentRestaurantId,
@@ -3453,45 +3458,95 @@ export async function recordDiningSessionPayment(params: RecordPaymentParams): P
   // Push to Supabase if connected and AWAIT before committing locally
   const supabase = getSupabaseClient();
   if (supabase) {
+    let insertedPaymentIds: string[] = [];
+
     if (paymentPayloads.length > 0) {
-      const payRes = await supabase.from('royal_payments').insert(paymentPayloads);
-      if (payRes.error) {
-        console.error('Supabase recordDiningSessionPayment insert error:', payRes.error.message);
-        throw new Error(payRes.error.message || 'Database error: failed to record payment');
+      const candidateIds = paymentPayloads.map(p => p.id);
+
+      // Detect any existing payment records for these IDs (e.g. from a prior retried attempt)
+      let existingIds = new Set<string>();
+      try {
+        const { data: existingRecords, error: checkError } = await supabase
+          .from('royal_payments')
+          .select('id')
+          .in('id', candidateIds)
+          .eq('restaurant_id', currentRestaurantId);
+
+        if (!checkError && existingRecords) {
+          existingIds = new Set(existingRecords.map((r: any) => r.id));
+        }
+      } catch (checkErr) {
+        console.warn('Supabase idempotency check notice:', checkErr);
+      }
+
+      const payloadsToInsert = paymentPayloads.filter(p => !existingIds.has(p.id));
+
+      if (payloadsToInsert.length > 0) {
+        const payRes = await supabase.from('royal_payments').insert(payloadsToInsert);
+        if (payRes.error) {
+          console.error('Supabase recordDiningSessionPayment insert error:', payRes.error.message);
+          throw new Error(payRes.error.message || 'Database error: failed to record payment');
+        }
+        insertedPaymentIds = payloadsToInsert.map(p => p.id);
       }
     }
 
     if (affectedOrderIds.length > 0) {
-      const updatePromises = affectedOrderIds.map(async (id) => {
-        const ord = updatedOrders.find(o => o.id === id);
-        const updatePayload: Record<string, any> = {
-          status: isFullyPaid ? 'Completed' : ord?.status,
-          payment_status: ord ? ord.paymentStatus : (isFullyPaid ? 'Paid' : 'Pending'),
-          payment_mode: finalPaymentMode,
-          paid_amount: ord ? ord.paidAmount : (isFullyPaid ? grandTotal : newTotalPaid),
-          remaining_amount: ord ? ord.remainingAmount : (isFullyPaid ? 0 : newRemaining),
-          payment_history: allSessionPayments,
-          paid_at: isFullyPaid ? nowIso : (ord?.paidAt || undefined),
-          updated_at: nowIso
-        };
+      try {
+        const updatePromises = affectedOrderIds.map(async (id) => {
+          const ord = updatedOrders.find(o => o.id === id);
+          const updatePayload: Record<string, any> = {
+            status: isFullyPaid ? 'Completed' : ord?.status,
+            payment_status: ord ? ord.paymentStatus : (isFullyPaid ? 'Paid' : 'Pending'),
+            payment_mode: finalPaymentMode,
+            paid_amount: ord ? ord.paidAmount : (isFullyPaid ? grandTotal : newTotalPaid),
+            remaining_amount: ord ? ord.remainingAmount : (isFullyPaid ? 0 : newRemaining),
+            payment_history: allSessionPayments,
+            paid_at: isFullyPaid ? nowIso : (ord?.paidAt || undefined),
+            updated_at: nowIso
+          };
 
-        // Clean undefined keys
-        Object.keys(updatePayload).forEach(key => {
-          if (updatePayload[key] === undefined) delete updatePayload[key];
+          // Clean undefined keys
+          Object.keys(updatePayload).forEach(key => {
+            if (updatePayload[key] === undefined) delete updatePayload[key];
+          });
+
+          const res = await supabase
+            .from('royal_orders')
+            .update(updatePayload)
+            .eq('order_id', id)
+            .eq('restaurant_id', currentRestaurantId);
+
+          if (res.error) {
+            console.error('Supabase recordDiningSessionPayment update order error:', res.error.message);
+            throw new Error(res.error.message || 'Database error: failed to update order payment status');
+          }
         });
+        await Promise.all(updatePromises);
+      } catch (orderUpdateErr: any) {
+        // Compensating rollback: Attempt to delete ONLY the payment rows inserted during this exact operation
+        if (insertedPaymentIds.length > 0) {
+          try {
+            const { error: rollbackError } = await supabase
+              .from('royal_payments')
+              .delete()
+              .in('id', insertedPaymentIds)
+              .eq('restaurant_id', currentRestaurantId);
 
-        const res = await supabase
-          .from('royal_orders')
-          .update(updatePayload)
-          .eq('order_id', id)
-          .eq('restaurant_id', currentRestaurantId);
-
-        if (res.error) {
-          console.error('Supabase recordDiningSessionPayment update order error:', res.error.message);
-          throw new Error(res.error.message || 'Database error: failed to update order payment status');
+            if (rollbackError) {
+              console.error('Compensating rollback failed to delete partial payments:', rollbackError.message);
+              throw new Error(
+                `Payment processing failed during order status update (${orderUpdateErr.message}), and compensating rollback also failed: ${rollbackError.message}.`
+              );
+            }
+          } catch (rbErr: any) {
+            throw new Error(
+              rbErr.message || 'Payment processing failed and rollback encountered an error.'
+            );
+          }
         }
-      });
-      await Promise.all(updatePromises);
+        throw orderUpdateErr;
+      }
     }
   }
 

@@ -53,14 +53,14 @@ export const StaffAccessModal: React.FC<StaffAccessModalProps> = ({
       setError('Please enter your staff email address.');
       return;
     }
-    if (!cleanPassword && !cleanEmail.endsWith('@royalbiryani.com')) {
-      setError('Please enter your password.');
+    if (!cleanPassword) {
+      setError('Please enter your staff password.');
       return;
     }
 
     setIsLoading(true);
     try {
-      const res = await signInStaff(cleanEmail, cleanPassword || 'RoyalBiryani2025!', currentRestaurantId);
+      const res = await signInStaff(cleanEmail, cleanPassword, currentRestaurantId);
       if (res.error) {
         setError(res.error);
       } else if (res.profile) {
@@ -230,31 +230,33 @@ export const StaffAccessModal: React.FC<StaffAccessModalProps> = ({
             </button>
           </form>
 
-          {/* Quick Demo Staff Credentials Helper */}
-          <div className="pt-2 border-t border-[#e5e1da] space-y-1.5">
-            <div className="flex items-center justify-between text-[10px] text-stone-500 font-bold uppercase tracking-wider">
-              <span className="flex items-center gap-1">
-                <Sparkles className="w-3 h-3 text-[#d4af37]" />
-                Quick Demo Accounts:
-              </span>
+          {/* Quick Demo Staff Credentials Helper (Development Only) */}
+          {Boolean((import.meta as any).env?.DEV) && (
+            <div className="pt-2 border-t border-[#e5e1da] space-y-1.5">
+              <div className="flex items-center justify-between text-[10px] text-stone-500 font-bold uppercase tracking-wider">
+                <span className="flex items-center gap-1">
+                  <Sparkles className="w-3 h-3 text-[#d4af37]" />
+                  Quick Demo Accounts (Dev Only):
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-[11px]">
+                <button
+                  type="button"
+                  onClick={() => handleApplyPreset('chef@royalbiryani.com', 'kitchen')}
+                  className="px-2.5 py-1.5 rounded-lg bg-stone-100 hover:bg-[#e5e1da] text-stone-700 text-left transition font-medium border border-stone-200 truncate cursor-pointer"
+                >
+                  🍳 Head Chef (Kitchen)
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleApplyPreset('manager@royalbiryani.com', 'counter')}
+                  className="px-2.5 py-1.5 rounded-lg bg-stone-100 hover:bg-[#e5e1da] text-stone-700 text-left transition font-medium border border-stone-200 truncate cursor-pointer"
+                >
+                  💼 Store Mgr (Counter)
+                </button>
+              </div>
             </div>
-            <div className="grid grid-cols-2 gap-2 text-[11px]">
-              <button
-                type="button"
-                onClick={() => handleApplyPreset('chef@royalbiryani.com', 'kitchen')}
-                className="px-2.5 py-1.5 rounded-lg bg-stone-100 hover:bg-[#e5e1da] text-stone-700 text-left transition font-medium border border-stone-200 truncate cursor-pointer"
-              >
-                🍳 Head Chef (Kitchen)
-              </button>
-              <button
-                type="button"
-                onClick={() => handleApplyPreset('manager@royalbiryani.com', 'counter')}
-                className="px-2.5 py-1.5 rounded-lg bg-stone-100 hover:bg-[#e5e1da] text-stone-700 text-left transition font-medium border border-stone-200 truncate cursor-pointer"
-              >
-                💼 Store Mgr (Counter)
-              </button>
-            </div>
-          </div>
+          )}
 
           <p className="text-[10px] text-stone-400 text-center leading-tight">
             Customer QR dining tables do not require login. Staff operations are strictly isolated.
