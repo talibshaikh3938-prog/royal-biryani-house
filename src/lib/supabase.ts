@@ -180,6 +180,14 @@ export function verifyTableToken(tableNumber: string, token?: string | null, res
   return token.trim().toLowerCase() === expected.toLowerCase();
 }
 
+let _orderSequence = 0;
+export function generateOrderId(): string {
+  const ts = Date.now().toString(36).toUpperCase();
+  const count = ((++_orderSequence) % 46656).toString(36).toUpperCase().padStart(3, '0');
+  const rand = Math.random().toString(36).substring(2, 6).toUpperCase().padEnd(4, '0');
+  return `RBH-${ts}-${count}${rand}`;
+}
+
 // Sensible Default Tables (10 Dine-In Tables + Outdoor Patio & Takeaway with Verified QR Tokens)
 export const DEFAULT_RESTAURANT_TABLES: RestaurantTable[] = [
   { id: 'tbl-1', restaurant_id: DEFAULT_RESTAURANT_ID, tableNumber: 'Table 1', section: 'Ground Floor', capacity: 4, isActive: true, displayOrder: 1, qr_token: generateTableQrToken('Table 1') },
@@ -2626,29 +2634,26 @@ export async function saveOrder(order: Order, restaurantId?: string): Promise<Or
     }
   }
 
-  const updated = [finalOrder, ...current.filter(o => o.id !== finalOrder.id)];
-  saveStoredOrders(updated, currentRid);
-  setCustomerActiveOrderId(finalOrder.id);
-
   // Push to Supabase with strict restaurant_id isolation and await
   const supabase = getSupabaseClient();
   if (supabase) {
     const payload = mapOrderToSupabasePayload(finalOrder);
-    try {
-      const res = await supabase
-        .from('royal_orders')
-        .upsert([payload], { onConflict: 'order_id' });
+    const res = await supabase
+      .from('royal_orders')
+      .upsert([payload], { onConflict: 'order_id' });
 
-      if (res.error) {
-        console.warn('Supabase saveOrder upsert notice:', res.error.message);
-      }
-    } catch (err) {
-      console.warn('Supabase saveOrder notice:', err);
+    if (res.error) {
+      console.error('Supabase saveOrder database error:', res.error.message);
+      throw new Error(res.error.message || 'Database error while saving order');
     }
 
     const channelName = getOrdersRealtimeChannelName(currentRid);
     await sendSupabaseBroadcast(channelName, 'new_order', finalOrder);
   }
+
+  const updated = [finalOrder, ...current.filter(o => o.id !== finalOrder.id)];
+  saveStoredOrders(updated, currentRid);
+  setCustomerActiveOrderId(finalOrder.id);
 
   safeDispatchEvent(new CustomEvent('rbh_new_order', { detail: finalOrder }));
   if (ordersBroadcastChannel) {

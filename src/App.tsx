@@ -19,7 +19,8 @@ import {
   Info,
   Layers,
   ShieldAlert,
-  QrCode
+  QrCode,
+  AlertCircle
 } from 'lucide-react';
 import { MenuItem, CartItem, Order, OrderStatus, CustomerFeedback, StaffProfile } from './types';
 import { 
@@ -43,6 +44,7 @@ import {
   signOutStaff,
   verifyTableToken,
   generateTableQrToken,
+  generateOrderId,
   getCurrentRestaurantId
 } from './lib/supabase';
 import { DEFAULT_MENU_ITEMS } from './data/defaultMenu';
@@ -78,8 +80,9 @@ export default function App() {
   
   // Table state (parsed from ?table=X if present)
   const [tableNumber, setTableNumber] = useState<string>('Table 4');
-  const [isTableVerified, setIsTableVerified] = useState<boolean>(true);
+  const [isTableVerified, setIsTableVerified] = useState<boolean>(false);
   const [isTableTampered, setIsTableTampered] = useState<boolean>(false);
+  const [orderErrorMessage, setOrderErrorMessage] = useState<string | null>(null);
 
   // Menu items & Supabase state
   const [menuItems, setMenuItems] = useState<MenuItem[]>(DEFAULT_MENU_ITEMS);
@@ -159,6 +162,23 @@ export default function App() {
             setIsTableVerified(false);
             setIsTableTampered(false);
           }
+        }
+      } else {
+        // Direct visit to root "/" without ?table= query parameter
+        try {
+          const savedTable = sessionStorage.getItem(`rbh_verified_table_${rid}`);
+          const savedToken = sessionStorage.getItem(`rbh_table_token_${rid}`);
+          if (savedTable && savedToken && verifyTableToken(savedTable, savedToken, rid)) {
+            setTableNumber(savedTable);
+            setIsTableVerified(true);
+            setIsTableTampered(false);
+          } else {
+            setIsTableVerified(false);
+            setIsTableTampered(false);
+          }
+        } catch {
+          setIsTableVerified(false);
+          setIsTableTampered(false);
         }
       }
 
@@ -522,14 +542,16 @@ export default function App() {
   const handlePlaceOrder = async (customerName: string, customerNotes: string) => {
     if (cartItems.length === 0) return;
     setIsPlacingOrder(true);
+    setOrderErrorMessage(null);
 
     try {
       const subtotal = cartItems.reduce((sum, ci) => sum + ci.item.Price * ci.quantity, 0);
       const tax = Math.round(subtotal * 0.05 * 10) / 10;
       const total = subtotal + tax;
 
-      // Generate realistic readable order ID (e.g. RBH-106)
-      const orderNum = Math.floor(100 + Math.random() * 900);
+      // Generate highly collision-resistant, readable order ID with timestamp + sequence + randomness
+      const orderId = generateOrderId();
+
       const rid = getCurrentRestaurantId();
       let activeQrToken: string | undefined = undefined;
       try {
@@ -546,7 +568,7 @@ export default function App() {
       } catch {}
 
       const newOrder: Order = {
-        id: `RBH-${orderNum}`,
+        id: orderId,
         tableNumber: tableNumber || 'Table 1',
         qr_token: activeQrToken,
         items: cartItems.map((ci) => ({
@@ -569,18 +591,23 @@ export default function App() {
         estimatedMinutes: 15 + (cartItems.length > 3 ? 10 : 0),
       };
 
-      // Save to persistence
+      // Save to persistence (throws if Supabase database rejects)
       await saveOrder(newOrder);
       setActiveCustomerOrderId(newOrder.id);
       await loadOrders();
 
-      // Reset cart and show confirmation modal
+      // Reset cart and show confirmation modal only upon successful persistence
       setCartItems([]);
       setIsCartOpen(false);
       setPlacedOrder(newOrder);
       setIsConfirmationOpen(true);
-    } catch (e) {
+      setOrderErrorMessage(null);
+    } catch (e: any) {
       console.error('Failed to place order', e);
+      // DO NOT clear cart!
+      // DO NOT show confirmation modal!
+      const errorMsg = 'Order could not be placed. Please verify your table QR or try again.';
+      setOrderErrorMessage(errorMsg);
     } finally {
       setIsPlacingOrder(false);
     }
@@ -792,6 +819,29 @@ export default function App() {
               </div>
             </div>
           </div>
+
+          {/* Order Placement Error Banner */}
+          {orderErrorMessage && !isCartOpen && (
+            <div className="bg-red-50 border border-red-300 p-4 rounded-2xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-red-900 shadow-xs animate-in fade-in">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-xl bg-red-200 text-red-900 flex items-center justify-center shrink-0">
+                  <AlertCircle className="w-5 h-5" />
+                </div>
+                <div>
+                  <p className="text-xs font-bold">Order could not be placed</p>
+                  <p className="text-[11px] text-red-800">
+                    {orderErrorMessage}
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setIsCartOpen(true)}
+                className="px-3 py-1.5 rounded-xl bg-red-800 hover:bg-red-900 text-white text-xs font-bold flex items-center gap-1.5 shrink-0 transition"
+              >
+                <span>View Cart & Retry</span>
+              </button>
+            </div>
+          )}
 
           {/* Tamper / Unverified Table Alert Banner */}
           {isTableTampered && (
@@ -1078,6 +1128,7 @@ export default function App() {
         onOpenTableSelector={() => setIsTableSelectorOpen(true)}
         onPlaceOrder={handlePlaceOrder}
         isPlacingOrder={isPlacingOrder}
+        errorMessage={orderErrorMessage}
       />
 
       {/* Order Placed Live Tracking & Confirmation Modal - Customer Only */}

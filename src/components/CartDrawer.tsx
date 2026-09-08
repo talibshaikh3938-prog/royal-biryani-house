@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, ShoppingBag, Trash2, Plus, Minus, CreditCard, ChevronRight, Sparkles, MapPin, User, MessageSquare } from 'lucide-react';
+import { X, ShoppingBag, Trash2, Plus, Minus, CreditCard, ChevronRight, Sparkles, MapPin, User, MessageSquare, AlertCircle } from 'lucide-react';
 import { CartItem } from '../types';
 
 interface CartDrawerProps {
@@ -13,6 +13,7 @@ interface CartDrawerProps {
   onOpenTableSelector: () => void;
   onPlaceOrder: (customerName: string, notes: string) => Promise<void>;
   isPlacingOrder: boolean;
+  errorMessage?: string | null;
 }
 
 export const CartDrawer: React.FC<CartDrawerProps> = ({
@@ -26,6 +27,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
   onOpenTableSelector,
   onPlaceOrder,
   isPlacingOrder,
+  errorMessage,
 }) => {
   const [customerName, setCustomerName] = useState('');
   const [orderNotes, setOrderNotes] = useState('');
@@ -267,6 +269,15 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
         {/* Sticky Cart Footer with Place Order Button */}
         {cartItems.length > 0 && (
           <div className="p-4 bg-white border-t border-[#e5e1da] space-y-2 shadow-md">
+            {errorMessage && (
+              <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-800 flex items-start gap-2.5 text-xs animate-in fade-in">
+                <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-bold">Order could not be placed</p>
+                  <p className="text-[11px] text-red-700 mt-0.5">{errorMessage}</p>
+                </div>
+              </div>
+            )}
             <button
               id="confirm-place-order-btn"
               onClick={handleSubmit}
