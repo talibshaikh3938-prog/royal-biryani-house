@@ -302,6 +302,11 @@ export const KitchenDashboard: React.FC<KitchenDashboardProps> = ({
                             <MapPin className="w-3.5 h-3.5 text-[#d4af37]" />
                             <span className="uppercase">{order.tableNumber}</span>
                           </div>
+                          {order.isAddon && (
+                            <span className="px-2 py-0.5 rounded-md bg-amber-100 text-amber-900 border border-amber-300 font-bold text-[10px] uppercase tracking-wider">
+                              Add-on Round {order.round || 2}
+                            </span>
+                          )}
                         </div>
 
                         <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider ${getStatusBadgeClass(order.status)}`}>

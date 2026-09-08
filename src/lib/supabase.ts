@@ -344,14 +344,27 @@ export async function signInStaff(
   const targetRestId = targetRestaurantId.trim().toLowerCase() || DEFAULT_RESTAURANT_ID;
 
   // If Supabase client is connected, perform Supabase Auth
-  if (supabase && password) {
+  if (supabase) {
+    if (!password) {
+      return { user: null, profile: null, error: 'Please enter your staff password.' };
+    }
+
     try {
       const { data, error: authError } = await supabase.auth.signInWithPassword({
         email: cleanEmail,
         password: password
       });
 
-      if (!authError && data.user) {
+      if (authError) {
+        saveCurrentStaffProfile(null);
+        return { 
+          user: null, 
+          profile: null, 
+          error: authError.message || 'Authentication failed. Please check your credentials.' 
+        };
+      }
+
+      if (data.user) {
         // Authenticated with Supabase Auth! Now resolve database-backed staff allowlist or staff role
         let staffProfile: StaffProfile | null = null;
 
@@ -446,46 +459,53 @@ export async function signInStaff(
       }
     } catch (err: any) {
       console.warn('Supabase auth attempt error:', err.message);
+      return {
+        user: null,
+        profile: null,
+        error: err.message || 'Authentication error connecting to Supabase.'
+      };
     }
   }
 
-  // Demo fallback when Supabase credentials are not yet configured or for preset staff credentials
-  if (cleanEmail === 'chef@royalbiryani.com' || cleanEmail === 'kitchen@royalbiryani.com') {
-    const profile: StaffProfile = {
-      id: 'demo-kitchen-uid',
-      restaurant_id: targetRestId,
-      email: cleanEmail,
-      role: 'kitchen',
-      is_active: true,
-      full_name: 'Ustad Mohammed (Head Chef)'
-    };
-    saveCurrentStaffProfile(profile);
-    return { user: { id: profile.id, email: cleanEmail }, profile, error: undefined };
-  } else if (
-    cleanEmail === 'manager@royalbiryani.com' || 
-    cleanEmail === 'counter@royalbiryani.com' || 
-    cleanEmail === 'admin@royalbiryani.com' ||
-    cleanEmail === 'cashier@royalbiryani.com' ||
-    cleanEmail === 'billing@royalbiryani.com' ||
-    cleanEmail === 'waiter@royalbiryani.com'
-  ) {
-    const isWaiter = cleanEmail.includes('waiter');
-    const isCashier = cleanEmail.includes('cashier') || cleanEmail.includes('counter') || cleanEmail.includes('billing');
-    const isAdmin = cleanEmail.includes('admin');
-    const role: StaffProfile['role'] = isAdmin ? 'admin' : (cleanEmail.includes('manager') ? 'manager' : 'counter');
-    const fullName = isAdmin 
-      ? 'Farhan Ali (Administrator)' 
-      : (isWaiter ? 'Kabir Khan (Table Captain)' : (isCashier ? 'Farhan Ali (Billing Counter)' : 'Farhan Ali (Store Manager)'));
-    const profile: StaffProfile = {
-      id: `demo-${role}-uid`,
-      restaurant_id: targetRestId,
-      email: cleanEmail,
-      role,
-      is_active: true,
-      full_name: fullName
-    };
-    saveCurrentStaffProfile(profile);
-    return { user: { id: profile.id, email: cleanEmail }, profile, error: undefined };
+  // Demo fallback ONLY when Supabase is unavailable or unconfigured
+  if (!supabase) {
+    if (cleanEmail === 'chef@royalbiryani.com' || cleanEmail === 'kitchen@royalbiryani.com') {
+      const profile: StaffProfile = {
+        id: 'demo-kitchen-uid',
+        restaurant_id: targetRestId,
+        email: cleanEmail,
+        role: 'kitchen',
+        is_active: true,
+        full_name: 'Ustad Mohammed (Head Chef)'
+      };
+      saveCurrentStaffProfile(profile);
+      return { user: { id: profile.id, email: cleanEmail }, profile, error: undefined };
+    } else if (
+      cleanEmail === 'manager@royalbiryani.com' || 
+      cleanEmail === 'counter@royalbiryani.com' || 
+      cleanEmail === 'admin@royalbiryani.com' ||
+      cleanEmail === 'cashier@royalbiryani.com' ||
+      cleanEmail === 'billing@royalbiryani.com' ||
+      cleanEmail === 'waiter@royalbiryani.com'
+    ) {
+      const isWaiter = cleanEmail.includes('waiter');
+      const isCashier = cleanEmail.includes('cashier') || cleanEmail.includes('counter') || cleanEmail.includes('billing');
+      const isAdmin = cleanEmail.includes('admin');
+      const role: StaffProfile['role'] = isAdmin ? 'admin' : (cleanEmail.includes('manager') ? 'manager' : 'counter');
+      const fullName = isAdmin 
+        ? 'Farhan Ali (Administrator)' 
+        : (isWaiter ? 'Kabir Khan (Table Captain)' : (isCashier ? 'Farhan Ali (Billing Counter)' : 'Farhan Ali (Store Manager)'));
+      const profile: StaffProfile = {
+        id: `demo-${role}-uid`,
+        restaurant_id: targetRestId,
+        email: cleanEmail,
+        role,
+        is_active: true,
+        full_name: fullName
+      };
+      saveCurrentStaffProfile(profile);
+      return { user: { id: profile.id, email: cleanEmail }, profile, error: undefined };
+    }
   }
 
   return {
@@ -2909,21 +2929,6 @@ function initGlobalRealtimeIfNeeded() {
             notifyRealtimeListeners();
           }
         )
-        .on(
-          'postgres_changes',
-          { event: '*', schema: 'public', table: 'orders' },
-          (payload: any) => {
-            if (payload.new && payload.new.order_id && payload.new.status) {
-              const current = getStoredOrders();
-              const exists = current.find(o => o.id === payload.new.order_id);
-              if (exists && exists.status !== payload.new.status) {
-                const updated = current.map(o => o.id === payload.new.order_id ? { ...o, status: payload.new.status } : o);
-                safeStorage.setItem(ORDERS_STORAGE_KEY, JSON.stringify(updated));
-              }
-            }
-            notifyRealtimeListeners();
-          }
-        )
         .on('broadcast', { event: 'order_status_updated' }, (payload: any) => {
           if (payload.payload && payload.payload.orderId && payload.payload.status) {
             const current = getStoredOrders();
@@ -5274,9 +5279,6 @@ export function subscribeToRawMaterialsRealtime(onRawMaterialsChange: () => void
       supabaseChannel = supabase
         .channel('royal_raw_materials_realtime')
         .on('postgres_changes', { event: '*', schema: 'public', table: 'raw_materials' }, () => {
-          onRawMaterialsChange();
-        })
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'stock_movements' }, () => {
           onRawMaterialsChange();
         })
         .on('postgres_changes', { event: '*', schema: 'public', table: 'menu_item_recipes' }, () => {
