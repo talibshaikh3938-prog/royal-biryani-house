@@ -41,6 +41,9 @@ import {
   markOrderAsPaid, 
   settleDiningSession, 
   recordDiningSessionPayment,
+  settleDiningSessionAtomic,
+  generateSettlementAttemptId,
+  getCurrentRestaurantId,
   getPaymentsForSession,
   getStoredPayments,
   updateOrderStatus, 
@@ -484,18 +487,33 @@ export const CounterDashboard: React.FC<CounterDashboardProps> = ({
     setIsProcessingPayment(true);
 
     try {
+      const rid = getCurrentRestaurantId();
       const splitPayments: { mode: 'Cash' | 'UPI' | 'Card'; amount: number }[] = [];
       if (cashNum > 0) splitPayments.push({ mode: 'Cash', amount: cashNum });
       if (upiNum > 0) splitPayments.push({ mode: 'UPI', amount: upiNum });
       if (cardNum > 0) splitPayments.push({ mode: 'Card', amount: cardNum });
 
-      const result = await recordDiningSessionPayment({
+      const idempotencyKey = generateSettlementAttemptId(
+        rid,
+        session.sessionId,
+        session.tableNumber,
+        splitPayments
+      );
+
+      const result = await settleDiningSessionAtomic({
+        restaurantId: rid,
         sessionId: session.sessionId,
         tableNumber: session.tableNumber,
         splitPayments,
         recordedBy: paymentStaffInput || 'Counter Cashier',
-        notes: paymentNoteInput.trim() || undefined
+        notes: paymentNoteInput.trim() || undefined,
+        idempotencyKey
       });
+
+      if (!result.success) {
+        setPaymentValidationError(result.error || 'Failed to settle session payment.');
+        return;
+      }
 
       if (result.isFullyPaid) {
         // Capture completed session bill for immediate final receipt printing
@@ -506,22 +524,13 @@ export const CounterDashboard: React.FC<CounterDashboardProps> = ({
           orders: session.orders || [],
           subtotal: session.subtotal,
           tax: session.tax,
-          totalAmount: session.totalAmount,
-          paidAmount: session.totalAmount,
+          totalAmount: result.grandTotal || session.totalAmount,
+          paidAmount: result.paidAmountTotal || session.totalAmount,
           remainingAmount: 0,
           paymentStatus: 'Paid',
-          paymentHistory: [
-            ...(session.paymentHistory || []),
-            ...splitPayments.map((sp, idx) => ({
-              id: `pay_${Date.now()}_${idx}`,
-              tableNumber: session.tableNumber,
-              amount: sp.amount,
-              paymentMode: sp.mode,
-              createdAt: new Date().toISOString(),
-              recordedBy: paymentStaffInput || 'Counter Cashier',
-              notes: paymentNoteInput.trim() || undefined
-            }))
-          ],
+          paymentHistory: result.newPayments && result.newPayments.length > 0
+            ? [...(session.paymentHistory || []), ...result.newPayments]
+            : (session.paymentHistory || []),
           startedAt: session.startedAt,
           cashierName: paymentStaffInput || 'Counter Cashier'
         };

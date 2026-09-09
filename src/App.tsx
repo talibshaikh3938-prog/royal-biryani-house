@@ -22,7 +22,7 @@ import {
   QrCode,
   AlertCircle
 } from 'lucide-react';
-import { MenuItem, CartItem, Order, OrderStatus, CustomerFeedback, StaffProfile } from './types';
+import { MenuItem, CartItem, Order, OrderStatus, CustomerFeedback, StaffProfile, SecureOrderItemInput } from './types';
 import { 
   fetchMenuItems, 
   updateMenuItemAvailability, 
@@ -45,7 +45,10 @@ import {
   verifyTableToken,
   generateTableQrToken,
   generateOrderId,
-  getCurrentRestaurantId
+  getCurrentRestaurantId,
+  createOrderSecure,
+  customerGetMenuByQr,
+  customerGetContext
 } from './lib/supabase';
 import { DEFAULT_MENU_ITEMS } from './data/defaultMenu';
 import { Header } from './components/Header';
@@ -140,6 +143,15 @@ export default function App() {
               sessionStorage.setItem(`rbh_verified_table_${rid}`, formattedTable);
               sessionStorage.setItem(`rbh_table_token_${rid}`, tokenParam);
             } catch {}
+            // Retrieve server-authoritative table & active session context
+            customerGetContext({ restaurantId: rid, tableNumber: formattedTable, qrToken: tokenParam })
+              .then(ctx => {
+                if (ctx.success && ctx.activeSessionId) {
+                  sessionStorage.setItem(`rbh_customer_session_id_${rid}`, ctx.activeSessionId);
+                  sessionStorage.setItem('rbh_customer_session_id', ctx.activeSessionId);
+                }
+              })
+              .catch(() => {});
           } else {
             setIsTableVerified(false);
             setIsTableTampered(true);
@@ -213,9 +225,6 @@ export default function App() {
         try {
           qrToken = sessionStorage.getItem(`rbh_table_token_${currentRid}`);
         } catch {}
-        if (!qrToken) {
-          qrToken = generateTableQrToken(tableNumber, currentRid);
-        }
 
         const res = await fetchCustomerSessionOrders({
           sessionId: activeSessionId,
@@ -404,9 +413,30 @@ export default function App() {
   const loadMenu = useCallback(async () => {
     setIsRefreshing(true);
     try {
+      const currentRid = getCurrentRestaurantId();
+      let verifiedToken: string | null = null;
+      try {
+        verifiedToken = sessionStorage.getItem(`rbh_table_token_${currentRid}`);
+      } catch {}
+
+      // If customer view with verified QR token, load menu through secure RPC customer_get_menu_by_qr
+      if (currentView === 'customer' && isTableVerified && verifiedToken) {
+        const qrRes = await customerGetMenuByQr({
+          restaurantId: currentRid,
+          tableNumber,
+          qrToken: verifiedToken
+        });
+        if (qrRes.success && qrRes.items && qrRes.items.length > 0) {
+          setMenuItems(qrRes.items);
+          setDataSource('supabase');
+          setIsSupabaseConnected(true);
+          return;
+        }
+      }
+
       const config = getSupabaseConfig();
       const hasConfig = Boolean(config.url && config.anonKey);
-      const result = await fetchMenuItems();
+      const result = await fetchMenuItems(currentRid);
 
       if (result.items && result.items.length > 0) {
         setMenuItems(result.items);
@@ -419,7 +449,7 @@ export default function App() {
       setIsLoadingMenu(false);
       setIsRefreshing(false);
     }
-  }, []);
+  }, [currentView, isTableVerified, tableNumber]);
 
   useEffect(() => {
     loadMenu();
@@ -570,13 +600,6 @@ export default function App() {
     setOrderErrorMessage(null);
 
     try {
-      const subtotal = cartItems.reduce((sum, ci) => sum + ci.item.Price * ci.quantity, 0);
-      const tax = Math.round(subtotal * 0.05 * 10) / 10;
-      const total = subtotal + tax;
-
-      // Generate highly collision-resistant, readable order ID with timestamp + sequence + randomness
-      const orderId = generateOrderId();
-
       const rid = getCurrentRestaurantId();
       let activeQrToken: string | undefined = undefined;
       try {
@@ -592,32 +615,44 @@ export default function App() {
         }
       } catch {}
 
-      const newOrder: Order = {
-        id: orderId,
+      if (!activeQrToken) {
+        setOrderErrorMessage('Cannot place order: Please scan the table QR code stand before ordering.');
+        setIsPlacingOrder(false);
+        return;
+      }
+
+      // Sanitize items payload: Client strictly cannot supply prices, taxes, or total amounts
+      const secureItems: SecureOrderItemInput[] = cartItems.map((ci) => ({
+        id: String(ci.item.id),
+        quantity: ci.quantity,
+        ...(ci.specialNotes ? { notes: ci.specialNotes } : {}),
+        ...(ci.spiceLevel ? { spiceLevel: ci.spiceLevel } : {}),
+        ...(ci.selectedVariant ? { variantId: ci.selectedVariant.id } : {}),
+        ...(ci.selectedAddons && ci.selectedAddons.length > 0 ? { addonIds: ci.selectedAddons.map(a => a.id) } : {})
+      }));
+
+      let activeSessionId: string | null = null;
+      try {
+        activeSessionId = sessionStorage.getItem(`rbh_customer_session_id_${rid}`) || null;
+      } catch {}
+
+      // Call secure server-authoritative order creation RPC
+      const result = await createOrderSecure({
+        restaurantId: rid,
         tableNumber: tableNumber || 'Table 1',
-        qr_token: activeQrToken,
-        items: cartItems.map((ci) => ({
-          id: ci.item.id,
-          name: ci.item.Name,
-          price: ci.item.Price,
-          quantity: ci.quantity,
-          spiceLevel: ci.spiceLevel,
-          notes: ci.specialNotes,
-          image: ci.item.Image_url,
-        })),
-        subtotal,
-        tax,
-        total,
-        status: 'New',
-        paymentMethod: 'Pay at Counter',
+        qrToken: activeQrToken,
+        items: secureItems,
         customerName: customerName.trim() || undefined,
         customerNotes: customerNotes.trim() || undefined,
-        createdAt: new Date().toISOString(),
-        estimatedMinutes: 15 + (cartItems.length > 3 ? 10 : 0),
-      };
+        sessionId: activeSessionId
+      });
 
-      // Save to persistence (throws if Supabase database rejects)
-      const persistedOrder = await saveOrder(newOrder);
+      if (!result.success || !result.order) {
+        setOrderErrorMessage(result.error || 'Order could not be placed. Please verify your table QR or try again.');
+        return;
+      }
+
+      const persistedOrder = result.order;
       setActiveCustomerOrderId(persistedOrder.id);
       try {
         if (persistedOrder.sessionId) {
@@ -630,14 +665,14 @@ export default function App() {
       // Reset cart and show confirmation modal only upon successful persistence
       setCartItems([]);
       setIsCartOpen(false);
-      setPlacedOrder(newOrder);
+      setPlacedOrder(persistedOrder);
       setIsConfirmationOpen(true);
       setOrderErrorMessage(null);
     } catch (e: any) {
       console.error('Failed to place order', e);
       // DO NOT clear cart!
       // DO NOT show confirmation modal!
-      const errorMsg = 'Order could not be placed. Please verify your table QR or try again.';
+      const errorMsg = e?.message || 'Order could not be placed. Please verify your table QR or try again.';
       setOrderErrorMessage(errorMsg);
     } finally {
       setIsPlacingOrder(false);

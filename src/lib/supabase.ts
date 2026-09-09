@@ -30,7 +30,21 @@ import {
   MenuItemVariant,
   MenuItemAddon,
   BulkImportRow,
-  ImportValidationResult
+  ImportValidationResult,
+  SecureOrderItemInput,
+  CreateOrderSecureParams,
+  CreateOrderSecureResult,
+  SettlementPaymentSplit,
+  SettleDiningSessionAtomicParams,
+  SettleDiningSessionAtomicResult,
+  CustomerGetMenuByQrParams,
+  CustomerGetMenuByQrResult,
+  CustomerSubmitFeedbackParams,
+  CustomerSubmitFeedbackResult,
+  CustomerGetContextParams,
+  CustomerGetContextResult,
+  AdminRotateTableQrTokenParams,
+  AdminRotateTableQrTokenResult
 } from '../types';
 import { DEFAULT_MENU_ITEMS } from '../data/defaultMenu';
 import { 
@@ -176,8 +190,27 @@ export function generateTableQrToken(tableNumber: string, restaurantId: string =
 
 export function verifyTableToken(tableNumber: string, token?: string | null, restaurantId: string = getCurrentRestaurantId()): boolean {
   if (!token || !token.trim()) return false;
+  const cleanToken = token.trim();
+  const cleanTable = (tableNumber || '').trim().toLowerCase();
+  const cleanRest = (restaurantId || getCurrentRestaurantId()).trim().toLowerCase();
+
+  // 1. Check against active tables in storage / database cache (supports CSPRNG rbh_sec_ tokens & rotated tokens)
+  try {
+    const tables = getStoredRestaurantTables(cleanRest);
+    const found = tables.find(t => t.tableNumber.trim().toLowerCase() === cleanTable);
+    if (found) {
+      if (found.qr_token && found.qr_token.trim().toLowerCase() === cleanToken.toLowerCase()) {
+        return true;
+      }
+      if ((found as any).qr_token_legacy && String((found as any).qr_token_legacy).trim().toLowerCase() === cleanToken.toLowerCase()) {
+        return true;
+      }
+    }
+  } catch {}
+
+  // 2. Dual-token bridge: check against legacy deterministic token for backwards compatibility with physical stands
   const expected = generateTableQrToken(tableNumber, restaurantId);
-  return token.trim().toLowerCase() === expected.toLowerCase();
+  return cleanToken.toLowerCase() === expected.toLowerCase();
 }
 
 let _orderSequence = 0;
@@ -270,15 +303,16 @@ export function setCurrentRestaurantId(restaurantId: string): void {
 }
 
 // Stable Public App URL Builder for QR Code Stands
-export function getPublicAppUrl(tableParam?: string, restaurantId: string = getCurrentRestaurantId()): string {
-  const metaEnv = (import.meta as any).env || {};
-  let baseUrl = (metaEnv.VITE_APP_URL as string) || (metaEnv.APP_URL as string) || (typeof process !== 'undefined' && process.env ? (process.env.APP_URL || '') : '') || '';
+export function getPublicAppUrl(tableParam?: string, restaurantId?: string, explicitToken?: string): string {
+  const targetRest = restaurantId || getCurrentRestaurantId();
+  let baseUrl = '';
+  try {
+    if (typeof window !== 'undefined' && window.location) {
+      baseUrl = window.location.origin + window.location.pathname;
+    }
+  } catch {}
 
-  if (!baseUrl && typeof window !== 'undefined' && window.location) {
-    baseUrl = window.location.origin + window.location.pathname;
-  }
-
-  // If the URL contains the private developer container hostname (ais-dev-),
+  // If running in AIS developer preview environment (ais-dev-),
   // automatically transform it to the public preview hostname (ais-pre-)
   // so external mobile devices (Google Lens, iOS/Android cameras) can access the page without login barriers.
   if (baseUrl.includes('ais-dev-')) {
@@ -294,8 +328,23 @@ export function getPublicAppUrl(tableParam?: string, restaurantId: string = getC
 
   const cleanTable = tableParam.trim().replace(/^Table\s*/i, '');
   const normalizedTableName = `Table ${cleanTable}`;
-  const targetRest = restaurantId || getCurrentRestaurantId();
-  const token = generateTableQrToken(normalizedTableName, targetRest);
+
+  // Prefer explicit token or stored table token from DB / local cache
+  let token = explicitToken;
+  if (!token) {
+    try {
+      const tables = getStoredRestaurantTables(targetRest);
+      const found = tables.find(t => t.tableNumber.trim().toLowerCase() === normalizedTableName.toLowerCase());
+      if (found && found.qr_token) {
+        token = found.qr_token;
+      }
+    } catch {}
+  }
+
+  // Fallback to deterministic token for stand generator
+  if (!token) {
+    token = generateTableQrToken(normalizedTableName, targetRest);
+  }
 
   return `${baseUrl}?restaurant=${encodeURIComponent(targetRest)}&table=${encodeURIComponent(cleanTable)}&token=${encodeURIComponent(token)}`;
 }
@@ -755,8 +804,8 @@ export function mapSupabaseRowToMenuItem(row: Record<string, any>): MenuItem {
 }
 
 // Fetch menu items from Supabase or fallback
-export async function fetchMenuItems(): Promise<{ items: MenuItem[]; source: 'supabase' | 'local'; error?: string }> {
-  const currentRid = getCurrentRestaurantId();
+export async function fetchMenuItems(restaurantId?: string): Promise<{ items: MenuItem[]; source: 'supabase' | 'local'; error?: string }> {
+  const currentRid = restaurantId || getCurrentRestaurantId();
   const config = getSupabaseConfig();
   const supabase = getSupabaseClient();
   const availMap = getMenuAvailabilityMap(currentRid);
@@ -2517,7 +2566,7 @@ export async function fetchCustomerSessionOrders(params: {
   const targetRest = params.restaurantId || getCurrentRestaurantId();
   const targetTable = params.tableNumber;
   const targetSession = params.sessionId || null;
-  const targetToken = params.qrToken || generateTableQrToken(targetTable, targetRest);
+  const targetToken = params.qrToken || null;
 
   if (supabase) {
     try {
@@ -6166,5 +6215,779 @@ export async function executeGoLiveLocalReset(restaurantId: string = getCurrentR
   }
 }
 
+// ============================================================================
+// PHASE 6D: SECURE RPC ADAPTERS & INTEGRATION PREPARATION
+// ============================================================================
 
+/**
+ * Generates a deterministic, retry-safe settlement attempt identifier.
+ * Used as an idempotency key to prevent duplicate payment processing on network retries.
+ */
+export function generateSettlementAttemptId(
+  restaurantId: string,
+  sessionId: string,
+  tableNumber: string,
+  splitPayments: SettlementPaymentSplit[],
+  attemptNonce?: string
+): string {
+  const cleanRest = (restaurantId || getCurrentRestaurantId()).trim().toLowerCase();
+  const cleanSess = (sessionId || 'sess').trim().replace(/[^a-zA-Z0-9_-]/g, '');
+  const cleanTable = (tableNumber || 'tbl').trim().replace(/[^a-zA-Z0-9_-]/g, '');
+  const sortedSplits = [...splitPayments]
+    .sort((a, b) => a.mode.localeCompare(b.mode) || a.amount - b.amount)
+    .map(s => `${s.mode}:${Number(s.amount).toFixed(2)}`)
+    .join('-');
+  const nonce = attemptNonce || 'attempt1';
+  return `settle_${cleanRest}_${cleanTable}_${cleanSess}_${sortedSplits}_${nonce}`.slice(0, 100);
+}
+
+/**
+ * Resolves verified customer QR context for a given table.
+ * Validates against browser sessionStorage and cryptographic token verification.
+ */
+export function getVerifiedCustomerQrContext(
+  tableNumber: string,
+  restaurantId: string = getCurrentRestaurantId(),
+  providedToken?: string
+): { restaurantId: string; tableNumber: string; qrToken: string } | null {
+  const cleanRid = (restaurantId || getCurrentRestaurantId()).trim().toLowerCase() || DEFAULT_RESTAURANT_ID;
+  const cleanTable = (tableNumber || '').trim();
+  if (!cleanTable) return null;
+
+  // 1. If an explicit token was supplied, verify it directly
+  if (providedToken && verifyTableToken(cleanTable, providedToken, cleanRid)) {
+    return { restaurantId: cleanRid, tableNumber: cleanTable, qrToken: providedToken.trim() };
+  }
+
+  // 2. Check browser sessionStorage for verified dining table session
+  try {
+    if (typeof window !== 'undefined' && window.sessionStorage) {
+      const savedTable = window.sessionStorage.getItem(`rbh_verified_table_${cleanRid}`);
+      const savedToken = window.sessionStorage.getItem(`rbh_table_token_${cleanRid}`);
+      if (
+        savedTable &&
+        savedTable.toLowerCase().trim() === cleanTable.toLowerCase() &&
+        savedToken &&
+        verifyTableToken(cleanTable, savedToken, cleanRid)
+      ) {
+        return { restaurantId: cleanRid, tableNumber: cleanTable, qrToken: savedToken.trim() };
+      }
+    }
+  } catch {
+    // Safe storage access fallback
+  }
+
+  return null;
+}
+
+/**
+ * Future cutover: This secure RPC adapter replaces saveOrder for customer order placement.
+ * Creates an order via server-side authoritative pricing, tax, and status calculation.
+ */
+export async function createOrderSecure(
+  params: CreateOrderSecureParams
+): Promise<CreateOrderSecureResult> {
+  const supabase = getSupabaseClient();
+
+  if (!params.restaurantId || !params.tableNumber || !params.qrToken) {
+    return {
+      success: false,
+      error: 'Missing required parameters: restaurantId, tableNumber, and qrToken are mandatory.'
+    };
+  }
+
+  if (!params.items || !Array.isArray(params.items) || params.items.length === 0) {
+    return {
+      success: false,
+      error: 'Cannot create order: at least one order item is required.'
+    };
+  }
+
+  // Sanitize items payload: Client strictly cannot supply prices, taxes, or total amounts
+  const sanitizedItems = params.items.map(item => ({
+    id: String(item.id),
+    quantity: Math.max(1, Math.floor(Number(item.quantity) || 1)),
+    ...(item.notes ? { notes: String(item.notes).slice(0, 200) } : {}),
+    ...(item.spiceLevel ? { spiceLevel: String(item.spiceLevel) } : {}),
+    ...(item.variantId ? { variantId: String(item.variantId) } : {}),
+    ...(item.addonIds && Array.isArray(item.addonIds) ? { addonIds: item.addonIds.map(String) } : {})
+  }));
+
+  if (supabase) {
+    try {
+      const { data, error } = await supabase.rpc('create_order_secure', {
+        p_restaurant_id: params.restaurantId,
+        p_table_number: params.tableNumber,
+        p_qr_token: params.qrToken,
+        p_items: sanitizedItems,
+        p_customer_name: params.customerName?.trim() || null,
+        p_customer_notes: params.customerNotes?.trim() || null,
+        p_session_id: params.sessionId?.trim() || null
+      });
+
+      if (error) {
+        return {
+          success: false,
+          error: error.message || 'Error executing create_order_secure RPC'
+        };
+      }
+
+      if (!data) {
+        return {
+          success: false,
+          error: 'Empty response returned from create_order_secure RPC'
+        };
+      }
+
+      const rawOrder = (data && typeof data === 'object' && 'order' in data) ? (data as any).order : data;
+      const mappedOrder = mapSupabaseRowToOrder(rawOrder);
+
+      // Cache locally for resilient offline reading
+      try {
+        const stored = getStoredOrders(params.restaurantId);
+        if (!stored.some(o => o.id === mappedOrder.id)) {
+          saveStoredOrders([mappedOrder, ...stored], params.restaurantId);
+        }
+      } catch {}
+
+      return {
+        success: true,
+        order: mappedOrder
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err?.message || 'Unexpected error in createOrderSecure'
+      };
+    }
+  }
+
+  // Local / Offline fallback: Authoritative server-style calculation from local menu
+  if (!verifyTableToken(params.tableNumber, params.qrToken, params.restaurantId)) {
+    return {
+      success: false,
+      error: 'Access denied: Invalid or unverified table QR context'
+    };
+  }
+
+  const localRes = getLocalMenuItems();
+  const localItems = localRes.items && localRes.items.length > 0 ? localRes.items : DEFAULT_MENU_ITEMS;
+  let subtotal = 0;
+  const verifiedOrderItems: any[] = [];
+
+  for (const item of sanitizedItems) {
+    const found = localItems.find(mi => String(mi.id) === String(item.id)) || DEFAULT_MENU_ITEMS.find(mi => String(mi.id) === String(item.id));
+    if (!found) {
+      return { success: false, error: `Menu item "${item.id}" does not exist` };
+    }
+    const resolvedPrice = Number(found.basePrice ?? found.Price ?? 0);
+    const itemSub = resolvedPrice * item.quantity;
+    subtotal += itemSub;
+    verifiedOrderItems.push({
+      id: found.id,
+      name: found.Name,
+      price: resolvedPrice,
+      quantity: item.quantity,
+      spiceLevel: item.spiceLevel,
+      notes: item.notes,
+      image: found.Image_url
+    });
+  }
+
+  const tax = Math.round(subtotal * 0.05 * 10) / 10;
+  const total = subtotal + tax;
+  const orderId = generateOrderId();
+  const sessionId = params.sessionId || `SESS-${params.tableNumber.replace(/\s+/g, '')}-${Date.now()}`;
+
+  const mappedOrder: Order = {
+    id: orderId,
+    restaurant_id: params.restaurantId,
+    tableNumber: params.tableNumber,
+    sessionId,
+    round: 1,
+    isAddon: false,
+    items: verifiedOrderItems,
+    subtotal,
+    tax,
+    total,
+    status: 'New',
+    paymentMethod: 'Pay at Counter',
+    paymentStatus: 'Pending',
+    paymentMode: 'UPI',
+    paidAmount: 0,
+    remainingAmount: total,
+    customerName: params.customerName?.trim() || undefined,
+    customerNotes: params.customerNotes?.trim() || undefined,
+    createdAt: new Date().toISOString(),
+    estimatedMinutes: 15 + (sanitizedItems.length > 3 ? 10 : 0)
+  };
+
+  const stored = getStoredOrders(params.restaurantId);
+  saveStoredOrders([mappedOrder, ...stored], params.restaurantId);
+
+  return {
+    success: true,
+    order: mappedOrder
+  };
+}
+
+/**
+ * Future cutover: This secure RPC adapter replaces direct settlement mutations.
+ * Atomically records multi-split payment and updates open order statuses inside a single DB transaction.
+ */
+export async function settleDiningSessionAtomic(
+  params: SettleDiningSessionAtomicParams
+): Promise<SettleDiningSessionAtomicResult> {
+  const supabase = getSupabaseClient();
+
+  if (!params.restaurantId || !params.sessionId || !params.tableNumber) {
+    return {
+      success: false,
+      isFullyPaid: false,
+      grandTotal: 0,
+      totalPaidNow: 0,
+      paidAmountTotal: 0,
+      remainingAmount: 0,
+      newPayments: [],
+      error: 'Missing mandatory parameters: restaurantId, sessionId, and tableNumber are required.'
+    };
+  }
+
+  if (!params.splitPayments || !Array.isArray(params.splitPayments) || params.splitPayments.length === 0) {
+    return {
+      success: false,
+      isFullyPaid: false,
+      grandTotal: 0,
+      totalPaidNow: 0,
+      paidAmountTotal: 0,
+      remainingAmount: 0,
+      newPayments: [],
+      error: 'At least one payment split is required.'
+    };
+  }
+
+  const idempotencyKey = params.idempotencyKey || generateSettlementAttemptId(
+    params.restaurantId,
+    params.sessionId,
+    params.tableNumber,
+    params.splitPayments
+  );
+
+  const formattedSplits = params.splitPayments.map(sp => ({
+    mode: sp.mode,
+    amount: Math.round(Number(sp.amount) * 100) / 100
+  }));
+
+  if (supabase) {
+    try {
+      const { data, error } = await supabase.rpc('settle_dining_session_atomic', {
+        p_restaurant_id: params.restaurantId,
+        p_session_id: params.sessionId,
+        p_table_number: params.tableNumber,
+        p_split_payments: formattedSplits,
+        p_recorded_by: params.recordedBy || 'Counter Cashier',
+        p_notes: params.notes || null,
+        p_idempotency_key: idempotencyKey
+      });
+
+      if (error) {
+        return {
+          success: false,
+          isFullyPaid: false,
+          grandTotal: 0,
+          totalPaidNow: 0,
+          paidAmountTotal: 0,
+          remainingAmount: 0,
+          newPayments: [],
+          error: error.message || 'Error executing settle_dining_session_atomic RPC'
+        };
+      }
+
+      if (!data) {
+        return {
+          success: false,
+          isFullyPaid: false,
+          grandTotal: 0,
+          totalPaidNow: 0,
+          paidAmountTotal: 0,
+          remainingAmount: 0,
+          newPayments: [],
+          error: 'Empty response received from settle_dining_session_atomic'
+        };
+      }
+
+      const payload = typeof data === 'object' ? data : {};
+      const rawPayments: any[] = Array.isArray(payload.new_payments || payload.newPayments)
+        ? (payload.new_payments || payload.newPayments)
+        : [];
+      const mappedPayments: PaymentRecord[] = rawPayments.map(mapSupabaseRowToPayment);
+
+      return {
+        success: payload.success !== false,
+        isFullyPaid: Boolean(payload.is_fully_paid ?? payload.isFullyPaid),
+        grandTotal: Number(payload.grand_total ?? payload.grandTotal ?? 0),
+        totalPaidNow: Number(payload.total_paid_now ?? payload.totalPaidNow ?? 0),
+        paidAmountTotal: Number(payload.paid_amount_total ?? payload.paidAmountTotal ?? 0),
+        remainingAmount: Number(payload.remaining_amount ?? payload.remainingAmount ?? 0),
+        newPayments: mappedPayments
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        isFullyPaid: false,
+        grandTotal: 0,
+        totalPaidNow: 0,
+        paidAmountTotal: 0,
+        remainingAmount: 0,
+        newPayments: [],
+        error: err?.message || 'Unexpected error in settleDiningSessionAtomic'
+      };
+    }
+  }
+
+  // Local / Offline fallback
+  try {
+    const rec = await recordDiningSessionPayment({
+      sessionId: params.sessionId,
+      tableNumber: params.tableNumber,
+      splitPayments: formattedSplits,
+      recordedBy: params.recordedBy || 'Counter Cashier',
+      notes: params.notes,
+      idempotencyKey
+    });
+
+    const grandTotal = Math.round(((rec.paidAmountTotal || 0) + (rec.remainingAmount || 0)) * 100) / 100;
+
+    return {
+      success: true,
+      isFullyPaid: rec.isFullyPaid,
+      grandTotal,
+      totalPaidNow: rec.totalPaidNow,
+      paidAmountTotal: rec.paidAmountTotal,
+      remainingAmount: rec.remainingAmount,
+      newPayments: rec.newPayments
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      isFullyPaid: false,
+      grandTotal: 0,
+      totalPaidNow: 0,
+      paidAmountTotal: 0,
+      remainingAmount: 0,
+      newPayments: [],
+      error: err?.message || 'Failed to record payment in local storage'
+    };
+  }
+}
+
+/**
+ * Future cutover: This secure RPC adapter replaces direct public SELECT from menu_items.
+ * Loads active categorized menu items for a verified customer QR context without exposing tenant database structures.
+ */
+export async function customerGetMenuByQr(
+  params: CustomerGetMenuByQrParams
+): Promise<CustomerGetMenuByQrResult> {
+  const supabase = getSupabaseClient();
+
+  if (!params.restaurantId || !params.tableNumber || !params.qrToken) {
+    return {
+      success: false,
+      categories: [],
+      subcategories: [],
+      items: [],
+      error: 'Missing required parameters: restaurantId, tableNumber, and qrToken are mandatory.'
+    };
+  }
+
+  if (supabase) {
+    try {
+      let { data, error } = await supabase.rpc('customer_get_menu_by_qr', {
+        p_restaurant_id: params.restaurantId,
+        p_table_number: params.tableNumber,
+        p_qr_token: params.qrToken
+      });
+
+      if (error && (error.message.includes('function') || error.code === '42883')) {
+        const res2 = await supabase.rpc('customer_get_menu', {
+          p_restaurant_id: params.restaurantId,
+          p_table_number: params.tableNumber,
+          p_qr_token: params.qrToken
+        });
+        data = res2.data;
+        error = res2.error;
+      }
+
+      if (error) {
+        return {
+          success: false,
+          categories: [],
+          subcategories: [],
+          items: [],
+          error: error.message || 'Error executing customer_get_menu RPC'
+        };
+      }
+
+      if (!data) {
+        return {
+          success: false,
+          categories: [],
+          subcategories: [],
+          items: [],
+          error: 'Empty response received from customer_get_menu'
+        };
+      }
+
+      const rawCategories: any[] = Array.isArray(data.categories) ? data.categories : [];
+      const rawSubcategories: any[] = Array.isArray(data.subcategories) ? data.subcategories : [];
+      const rawItems: any[] = Array.isArray(data.items) ? data.items : [];
+
+      const mappedCategories: MenuCategory[] = rawCategories.map(c => ({
+        id: c.id,
+        restaurant_id: c.restaurant_id || params.restaurantId,
+        name: c.name,
+        description: c.description || undefined,
+        icon: c.icon || 'UtensilsCrossed',
+        displayOrder: c.display_order ?? c.displayOrder ?? 0,
+        isActive: c.is_active !== undefined ? Boolean(c.is_active) : true,
+        created_at: c.created_at,
+        updated_at: c.updated_at
+      }));
+
+      const mappedSubcategories: MenuSubcategory[] = rawSubcategories.map(s => ({
+        id: s.id,
+        restaurant_id: s.restaurant_id || params.restaurantId,
+        categoryId: s.category_id || s.categoryId || '',
+        name: s.name,
+        description: s.description || undefined,
+        displayOrder: s.display_order ?? s.displayOrder ?? 0,
+        isActive: s.is_active !== undefined ? Boolean(s.is_active) : true,
+        created_at: s.created_at,
+        updated_at: s.updated_at
+      }));
+
+      const mappedItems: MenuItem[] = rawItems.map(mapSupabaseRowToMenuItem);
+
+      return {
+        success: true,
+        categories: mappedCategories,
+        subcategories: mappedSubcategories,
+        items: mappedItems
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        categories: [],
+        subcategories: [],
+        items: [],
+        error: err?.message || 'Unexpected error in customerGetMenuByQr'
+      };
+    }
+  }
+
+  // Local / Offline fallback
+  if (!verifyTableToken(params.tableNumber, params.qrToken, params.restaurantId)) {
+    return {
+      success: false,
+      categories: [],
+      subcategories: [],
+      items: [],
+      error: 'Access denied: Invalid or unverified table QR context'
+    };
+  }
+
+  const localItems = getLocalMenuItems();
+  const categories = getStoredMenuCategories(params.restaurantId);
+  const subcategories = getStoredMenuSubcategories(params.restaurantId);
+
+  return {
+    success: true,
+    categories,
+    subcategories,
+    items: (localItems.items && localItems.items.length > 0 ? localItems.items : DEFAULT_MENU_ITEMS).filter(i => !i.is_archived && i.Available !== false)
+  };
+}
+
+/**
+ * Future cutover: This secure RPC adapter replaces direct public INSERT to customer_feedback.
+ * Submits guest dining feedback verified against active QR context.
+ */
+export async function customerSubmitFeedback(
+  params: CustomerSubmitFeedbackParams
+): Promise<CustomerSubmitFeedbackResult> {
+  const supabase = getSupabaseClient();
+
+  if (!params.restaurantId || !params.tableNumber || !params.qrToken) {
+    return {
+      success: false,
+      error: 'Missing required parameters: restaurantId, tableNumber, and qrToken are mandatory.'
+    };
+  }
+
+  const ratingNum = Math.max(1, Math.min(5, Math.round(Number(params.rating) || 5)));
+
+  if (supabase) {
+    try {
+      const { data, error } = await supabase.rpc('customer_submit_feedback', {
+        p_restaurant_id: params.restaurantId,
+        p_table_number: params.tableNumber,
+        p_qr_token: params.qrToken,
+        p_order_id: params.orderId || null,
+        p_customer_name: params.customerName?.trim() || 'Valued Guest',
+        p_rating: ratingNum,
+        p_review: params.review?.trim() || '',
+        p_tags: params.tags && Array.isArray(params.tags) ? params.tags : []
+      });
+
+      if (error) {
+        return {
+          success: false,
+          error: error.message || 'Error executing customer_submit_feedback RPC'
+        };
+      }
+
+      const feedbackId = typeof data === 'string' ? data : (data?.feedback_id || data?.id || undefined);
+
+      return {
+        success: true,
+        feedbackId
+      };
+    } catch (err: any) {
+      return {
+        success: false,
+        error: err?.message || 'Unexpected error in customerSubmitFeedback'
+      };
+    }
+  }
+
+  // Local fallback
+  if (!verifyTableToken(params.tableNumber, params.qrToken, params.restaurantId)) {
+    return {
+      success: false,
+      error: 'Access denied: Invalid or unverified table QR context'
+    };
+  }
+
+  const feedbackId = `FB-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 5)}`;
+  const newFeedback: CustomerFeedback = {
+    id: feedbackId,
+    restaurant_id: params.restaurantId,
+    orderId: params.orderId,
+    tableNumber: params.tableNumber,
+    customerName: params.customerName?.trim() || 'Valued Guest',
+    rating: ratingNum,
+    review: params.review?.trim() || '',
+    tags: params.tags && Array.isArray(params.tags) ? params.tags : [],
+    createdAt: new Date().toISOString()
+  };
+
+  saveCustomerFeedback(newFeedback, params.restaurantId);
+  return {
+    success: true,
+    feedbackId
+  };
+}
+
+/**
+ * Loads verified restaurant, table, and active dining session context for a scanned customer QR code.
+ */
+export async function customerGetContext(
+  params: CustomerGetContextParams
+): Promise<CustomerGetContextResult> {
+  const supabase = getSupabaseClient();
+  const cleanRest = (params.restaurantId || getCurrentRestaurantId()).trim();
+  const cleanTable = (params.tableNumber || '').trim();
+  const cleanToken = (params.qrToken || '').trim();
+
+  if (!cleanRest || !cleanTable || !cleanToken) {
+    return {
+      success: false,
+      error: 'Missing required parameters: restaurantId, tableNumber, and qrToken are mandatory.'
+    };
+  }
+
+  if (supabase) {
+    try {
+      const { data, error } = await supabase.rpc('customer_get_context', {
+        p_restaurant_id: cleanRest,
+        p_table_number: cleanTable,
+        p_qr_token: cleanToken
+      });
+
+      if (!error && data && typeof data === 'object') {
+        const rawRest = data.restaurant || {};
+        const rawTable = data.table || {};
+        const rawOrders = Array.isArray(data.orders) ? data.orders.map(mapSupabaseRowToOrder) : undefined;
+        return {
+          success: true,
+          restaurant: {
+            id: rawRest.id || cleanRest,
+            name: rawRest.name || rawRest.restaurant_name || 'Royal Biryani House',
+            tagline: rawRest.tagline,
+            address: rawRest.address,
+            phone: rawRest.phone,
+            email: rawRest.email,
+            gstin: rawRest.gstin || rawRest.gstNumber,
+            gstRate: Number(rawRest.gstRate ?? rawRest.gst_percentage ?? 5.0),
+            gstEnabled: rawRest.gstEnabled !== false,
+            currencySymbol: rawRest.currencySymbol || '₹',
+            openingTime: rawRest.openingTime,
+            closingTime: rawRest.closingTime,
+            logo: rawRest.logo || rawRest.logo_url
+          },
+          table: {
+            tableNumber: rawTable.table_number || rawTable.tableNumber || cleanTable,
+            section: rawTable.section || 'Ground Floor',
+            capacity: Number(rawTable.capacity || 4),
+            isActive: rawTable.is_active !== false
+          },
+          activeSessionId: data.session_id || data.sessionId || data.active_session_id || null,
+          orders: rawOrders
+        };
+      } else if (error) {
+        if (error.message.includes('Access denied') || error.code === '42501') {
+          return {
+            success: false,
+            error: error.message || 'Access denied: Invalid or unverified table QR context'
+          };
+        }
+      }
+    } catch (e: any) {
+      console.warn('customer_get_context RPC notice:', e);
+    }
+  }
+
+  // Fallback: Verify table token against local store
+  if (!verifyTableToken(cleanTable, cleanToken, cleanRest)) {
+    return {
+      success: false,
+      error: 'Access denied: Invalid or unverified table QR context'
+    };
+  }
+
+  const settings = getStoredRestaurantSettings(cleanRest);
+  const tables = getStoredRestaurantTables(cleanRest);
+  const matchedTable = tables.find(t => t.tableNumber.trim().toLowerCase() === cleanTable.toLowerCase()) || {
+    id: 'tbl-default',
+    restaurant_id: cleanRest,
+    tableNumber: cleanTable,
+    section: 'Ground Floor',
+    capacity: 4,
+    isActive: true
+  };
+
+  const localOrders = getStoredOrders(cleanRest);
+  const activeOrders = getActiveSessionOrders(cleanTable, localOrders, cleanRest);
+  const activeSessionId = activeOrders.length > 0 ? activeOrders[0].sessionId || null : null;
+
+  return {
+    success: true,
+    restaurant: {
+      id: settings.restaurant_id || cleanRest,
+      name: settings.name || 'Royal Biryani House',
+      tagline: settings.tagline,
+      address: settings.address,
+      phone: settings.phone,
+      email: settings.email,
+      gstin: settings.gstNumber || settings.gstin,
+      gstRate: settings.gstRate || 5.0,
+      gstEnabled: settings.gstEnabled !== false,
+      currencySymbol: settings.currencySymbol || '₹',
+      openingTime: settings.openingTime,
+      closingTime: settings.closingTime,
+      logo: settings.logo
+    },
+    table: {
+      tableNumber: matchedTable.tableNumber,
+      section: matchedTable.section,
+      capacity: matchedTable.capacity,
+      isActive: matchedTable.isActive !== false
+    },
+    activeSessionId,
+    orders: activeOrders
+  };
+}
+
+/**
+ * Staff-only RPC adapter to rotate table QR token.
+ * Generates a new 128-bit CSPRNG token in Supabase and archives previous token to legacy column.
+ */
+export async function adminRotateTableQrToken(
+  params: AdminRotateTableQrTokenParams
+): Promise<AdminRotateTableQrTokenResult> {
+  const supabase = getSupabaseClient();
+  const cleanRest = (params.restaurantId || getCurrentRestaurantId()).trim();
+  const cleanTableId = (params.tableId || '').trim();
+
+  if (!cleanRest || !cleanTableId) {
+    return {
+      success: false,
+      error: 'Missing required parameters: tableId and restaurantId are mandatory.'
+    };
+  }
+
+  if (supabase) {
+    try {
+      let { data, error } = await supabase.rpc('admin_rotate_table_qr_token', {
+        p_table_id: cleanTableId,
+        p_restaurant_id: cleanRest
+      });
+
+      if (error && (error.message.includes('function') || error.code === '42883')) {
+        const res2 = await supabase.rpc('rotate_table_qr_token', {
+          p_table_id: cleanTableId,
+          p_restaurant_id: cleanRest
+        });
+        data = res2.data;
+        error = res2.error;
+      }
+
+      if (error) {
+        return {
+          success: false,
+          error: error.message || 'Failed to rotate QR token'
+        };
+      }
+
+      const newToken = typeof data === 'string' ? data : (data?.new_token || data?.token || undefined);
+      if (newToken) {
+        const tables = getStoredRestaurantTables(cleanRest);
+        const updated = tables.map(t =>
+          t.id === cleanTableId
+            ? { ...t, qr_token: newToken, updated_at: new Date().toISOString() }
+            : t
+        );
+        saveStoredRestaurantTables(updated, cleanRest);
+        safeDispatchEvent(new CustomEvent('rbh_restaurant_tables_changed'));
+        return { success: true, newToken };
+      }
+    } catch (e: any) {
+      console.warn('admin_rotate_table_qr_token RPC error:', e);
+    }
+  }
+
+  // Local fallback: generate random CSPRNG hex token
+  let randomHex = '';
+  try {
+    if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+      const buf = new Uint8Array(16);
+      crypto.getRandomValues(buf);
+      randomHex = Array.from(buf).map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+  } catch {}
+  if (!randomHex) {
+    randomHex = Math.random().toString(36).substring(2, 10) + Math.random().toString(36).substring(2, 10);
+  }
+
+  const newToken = `rbh_sec_${randomHex}`;
+  const tables = getStoredRestaurantTables(cleanRest);
+  const updated = tables.map(t =>
+    t.id === cleanTableId
+      ? { ...t, qr_token: newToken, updated_at: new Date().toISOString() }
+      : t
+  );
+  saveStoredRestaurantTables(updated, cleanRest);
+  safeDispatchEvent(new CustomEvent('rbh_restaurant_tables_changed'));
+  return { success: true, newToken };
+}
 

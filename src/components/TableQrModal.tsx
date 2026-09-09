@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { X, QrCode, ExternalLink, Copy, Check, Smartphone, Sparkles } from 'lucide-react';
-import { getPublicAppUrl, fetchRestaurantTables } from '../lib/supabase';
+import { X, QrCode, ExternalLink, Copy, Check, Smartphone, Sparkles, RefreshCw, AlertCircle } from 'lucide-react';
+import { getPublicAppUrl, fetchRestaurantTables, adminRotateTableQrToken, getCurrentRestaurantId } from '../lib/supabase';
 import { RestaurantTable } from '../types';
 
 interface TableQrModalProps {
@@ -16,7 +16,10 @@ export const TableQrModal: React.FC<TableQrModalProps> = ({
 }) => {
   const [selectedTable, setSelectedTable] = useState(currentTable || 'Table 4');
   const [tablesList, setTablesList] = useState<string[]>([]);
+  const [fullTables, setFullTables] = useState<RestaurantTable[]>([]);
   const [copied, setCopied] = useState(false);
+  const [isRotating, setIsRotating] = useState(false);
+  const [rotateFeedback, setRotateFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   useEffect(() => {
     if (isOpen) {
@@ -26,6 +29,7 @@ export const TableQrModal: React.FC<TableQrModalProps> = ({
       // Load tables dynamically
       fetchRestaurantTables().then((tables: RestaurantTable[]) => {
         if (tables && tables.length > 0) {
+          setFullTables(tables);
           const numbers = tables.map(t => t.tableNumber);
           setTablesList(numbers);
         } else {
@@ -39,8 +43,9 @@ export const TableQrModal: React.FC<TableQrModalProps> = ({
 
   if (!isOpen) return null;
 
-  // Construct stable, configurable public URL with table param
-  const qrTargetUrl = getPublicAppUrl(selectedTable);
+  // Construct stable, configurable public URL with verified table QR token
+  const selectedTableObj = fullTables.find(t => t.tableNumber.toLowerCase() === selectedTable.toLowerCase());
+  const qrTargetUrl = getPublicAppUrl(selectedTable, undefined, selectedTableObj?.qr_token);
   
   // Use high-quality QR code image generator service with burgundy styling
   const qrImageSrc = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(qrTargetUrl)}&color=5c1b1b&bgcolor=fdfbf7&margin=2`;
@@ -49,6 +54,38 @@ export const TableQrModal: React.FC<TableQrModalProps> = ({
     navigator.clipboard.writeText(qrTargetUrl);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleRotateToken = async () => {
+    if (!selectedTableObj) return;
+    if (!window.confirm(`Rotate QR code security token for ${selectedTable}? Any previously printed stand for this table will be invalidated.`)) {
+      return;
+    }
+
+    setIsRotating(true);
+    setRotateFeedback(null);
+
+    try {
+      const res = await adminRotateTableQrToken({
+        tableId: selectedTableObj.id,
+        restaurantId: selectedTableObj.restaurant_id || getCurrentRestaurantId()
+      });
+
+      if (res.success && res.newToken) {
+        setRotateFeedback({ type: 'success', message: `✓ QR token rotated for ${selectedTable}!` });
+        const refreshed = await fetchRestaurantTables();
+        if (refreshed && refreshed.length > 0) {
+          setFullTables(refreshed);
+        }
+        setTimeout(() => setRotateFeedback(null), 3500);
+      } else {
+        setRotateFeedback({ type: 'error', message: res.error || 'Failed to rotate QR token' });
+      }
+    } catch (e: any) {
+      setRotateFeedback({ type: 'error', message: e.message || 'Error rotating QR token' });
+    } finally {
+      setIsRotating(false);
+    }
   };
 
   return (
@@ -119,6 +156,22 @@ export const TableQrModal: React.FC<TableQrModalProps> = ({
             Scan this QR code with any smartphone camera to test the seamless contactless ordering experience directly for <strong>{selectedTable}</strong>.
           </p>
 
+          {/* Feedback Toast */}
+          {rotateFeedback && (
+            <div className={`p-2.5 rounded-xl border text-xs font-semibold flex items-center justify-center gap-1.5 animate-in fade-in ${
+              rotateFeedback.type === 'success'
+                ? 'bg-emerald-50 border-emerald-300 text-emerald-800'
+                : 'bg-red-50 border-red-300 text-red-800'
+            }`}>
+              {rotateFeedback.type === 'success' ? (
+                <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+              ) : (
+                <AlertCircle className="w-3.5 h-3.5 text-red-600 shrink-0" />
+              )}
+              <span>{rotateFeedback.message}</span>
+            </div>
+          )}
+
           {/* Action Buttons */}
           <div className="grid grid-cols-2 gap-2">
             <button
@@ -138,6 +191,19 @@ export const TableQrModal: React.FC<TableQrModalProps> = ({
               <span>Open Menu</span>
             </a>
           </div>
+
+          {selectedTableObj && (
+            <button
+              id="modal-rotate-qr-token-btn"
+              type="button"
+              onClick={handleRotateToken}
+              disabled={isRotating}
+              className="w-full py-2 px-3 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isRotating ? 'animate-spin text-amber-700' : ''}`} />
+              <span>{isRotating ? 'Rotating Security Token...' : 'Rotate Table QR Token'}</span>
+            </button>
+          )}
         </div>
       </div>
     </div>

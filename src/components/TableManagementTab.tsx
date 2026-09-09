@@ -24,13 +24,15 @@ import {
   deleteRestaurantTable,
   getStoredRestaurantTables,
   getCurrentRestaurantId,
-  getPublicAppUrl 
+  getPublicAppUrl,
+  adminRotateTableQrToken
 } from '../lib/supabase';
 
 export const TableManagementTab: React.FC = () => {
   const [tables, setTables] = useState<RestaurantTable[]>(() => getStoredRestaurantTables());
   const [isLoading, setIsLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [rotatingTableId, setRotatingTableId] = useState<string | null>(null);
   const [selectedSection, setSelectedSection] = useState<string>('All');
   const [editingTable, setEditingTable] = useState<Partial<RestaurantTable> | null>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -126,8 +128,39 @@ export const TableManagementTab: React.FC = () => {
     }
   };
 
-  const getTableQrUrl = (tableNumber: string) => {
-    return getPublicAppUrl(tableNumber);
+  const getTableQrUrl = (tableNumber: string, explicitToken?: string) => {
+    return getPublicAppUrl(tableNumber, getCurrentRestaurantId(), explicitToken);
+  };
+
+  const handleRotateQr = async (table: RestaurantTable) => {
+    if (!window.confirm(`Rotate QR security token for ${table.tableNumber}? Existing printed QR code stands for this table will be invalidated.`)) {
+      return;
+    }
+
+    setRotatingTableId(table.id);
+    setErrorMessage(null);
+
+    try {
+      const result = await adminRotateTableQrToken({
+        tableId: table.id,
+        restaurantId: table.restaurant_id || getCurrentRestaurantId()
+      });
+
+      if (result.success && result.newToken) {
+        setFeedbackToast(`✓ QR token rotated successfully for ${table.tableNumber}!`);
+        if (selectedQrTable && selectedQrTable.id === table.id) {
+          setSelectedQrTable(prev => prev ? { ...prev, qr_token: result.newToken } : null);
+        }
+        await loadTables();
+        setTimeout(() => setFeedbackToast(null), 3500);
+      } else {
+        setErrorMessage(result.error || `Failed to rotate QR token for ${table.tableNumber}.`);
+      }
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to rotate QR token.');
+    } finally {
+      setRotatingTableId(null);
+    }
   };
 
   return (
@@ -272,10 +305,22 @@ export const TableManagementTab: React.FC = () => {
                 <span className="font-semibold">{table.capacity} Seats</span>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-1.5 flex-wrap justify-end">
+                <button
+                  id={`rotate-qr-${table.id}`}
+                  type="button"
+                  onClick={() => handleRotateQr(table)}
+                  disabled={rotatingTableId === table.id}
+                  className="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-stone-100 hover:bg-stone-200 text-stone-700 font-bold text-[10px] transition cursor-pointer disabled:opacity-50"
+                  title="Rotate Table QR Token"
+                >
+                  <RefreshCw className={`w-2.5 h-2.5 ${rotatingTableId === table.id ? 'animate-spin text-[#5c1b1b]' : ''}`} />
+                  <span>Rotate</span>
+                </button>
+
                 <button
                   onClick={() => setSelectedQrTable(table)}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#5c1b1b]/10 hover:bg-[#5c1b1b]/20 text-[#5c1b1b] font-bold text-[11px] transition"
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#5c1b1b]/10 hover:bg-[#5c1b1b]/20 text-[#5c1b1b] font-bold text-[11px] transition cursor-pointer"
                   title="View Table QR Stand"
                 >
                   <QrCode className="w-3 h-3" />
@@ -284,7 +329,7 @@ export const TableManagementTab: React.FC = () => {
 
                 <button
                   onClick={() => handleToggleActive(table)}
-                  className={`px-2 py-1 rounded-lg text-[10px] font-bold transition ${
+                  className={`px-2 py-1 rounded-lg text-[10px] font-bold transition cursor-pointer ${
                     table.isActive 
                       ? 'bg-stone-100 hover:bg-stone-200 text-stone-700' 
                       : 'bg-emerald-100 hover:bg-emerald-200 text-emerald-800'
@@ -454,7 +499,7 @@ export const TableManagementTab: React.FC = () => {
 
                 <div className="bg-[#fdfbf7] p-2 rounded-xl shadow-inner mx-auto w-44 h-44 flex items-center justify-center border border-[#d4af37]/30">
                   <img
-                    src={`https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(getTableQrUrl(selectedQrTable.tableNumber))}&color=5c1b1b&bgcolor=fdfbf7&margin=2`}
+                    src={`https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(getTableQrUrl(selectedQrTable.tableNumber, selectedQrTable.qr_token))}&color=5c1b1b&bgcolor=fdfbf7&margin=2`}
                     alt={`QR code for ${selectedQrTable.tableNumber}`}
                     className="w-full h-full object-contain"
                   />
@@ -469,13 +514,25 @@ export const TableManagementTab: React.FC = () => {
               <div className="p-3 bg-white rounded-xl border border-[#e5e1da] text-left text-xs space-y-1">
                 <p className="text-stone-500 text-[11px] font-medium">Table Target URL:</p>
                 <p className="font-mono text-[11px] text-[#5c1b1b] break-all">
-                  {getTableQrUrl(selectedQrTable.tableNumber)}
+                  {getTableQrUrl(selectedQrTable.tableNumber, selectedQrTable.qr_token)}
                 </p>
               </div>
 
               <button
+                id="modal-rotate-qr-btn"
+                type="button"
+                onClick={() => handleRotateQr(selectedQrTable)}
+                disabled={rotatingTableId === selectedQrTable.id}
+                className="w-full py-2.5 rounded-xl bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-xs font-bold transition flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${rotatingTableId === selectedQrTable.id ? 'animate-spin text-amber-700' : ''}`} />
+                <span>{rotatingTableId === selectedQrTable.id ? 'Rotating Security Token...' : 'Rotate Table QR Token'}</span>
+              </button>
+
+              <button
+                type="button"
                 onClick={() => setSelectedQrTable(null)}
-                className="w-full py-2 rounded-xl bg-[#5c1b1b] hover:bg-[#4a1515] text-white text-xs font-bold transition shadow-xs"
+                className="w-full py-2 rounded-xl bg-[#5c1b1b] hover:bg-[#4a1515] text-white text-xs font-bold transition shadow-xs cursor-pointer"
               >
                 Close Stand View
               </button>

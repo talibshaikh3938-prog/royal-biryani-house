@@ -461,3 +461,134 @@ export interface RestaurantBackupSnapshot {
   };
 }
 
+// ============================================================================
+// PHASE 6D: SECURE RPC ADAPTER TYPES
+// ============================================================================
+
+export interface SecureOrderItemInput {
+  id: string;
+  quantity: number;
+  notes?: string;
+  spiceLevel?: string;
+  variantId?: string;
+  addonIds?: string[];
+}
+
+export interface CreateOrderSecureParams {
+  restaurantId: string;
+  tableNumber: string;
+  qrToken: string;
+  items: SecureOrderItemInput[];
+  customerName?: string;
+  customerNotes?: string;
+  sessionId?: string | null;
+}
+
+export interface CreateOrderSecureResult {
+  success: boolean;
+  order?: Order;
+  error?: string;
+}
+
+export interface SettlementPaymentSplit {
+  mode: 'Cash' | 'UPI' | 'Card';
+  amount: number;
+}
+
+export interface SettleDiningSessionAtomicParams {
+  restaurantId: string;
+  sessionId: string;
+  tableNumber: string;
+  splitPayments: SettlementPaymentSplit[];
+  recordedBy?: string;
+  notes?: string;
+  idempotencyKey?: string;
+}
+
+export interface SettleDiningSessionAtomicResult {
+  success: boolean;
+  isFullyPaid: boolean;
+  grandTotal: number;
+  totalPaidNow: number;
+  paidAmountTotal: number;
+  remainingAmount: number;
+  newPayments: PaymentRecord[];
+  error?: string;
+}
+
+export interface CustomerGetMenuByQrParams {
+  restaurantId: string;
+  tableNumber: string;
+  qrToken: string;
+}
+
+export interface CustomerGetMenuByQrResult {
+  success: boolean;
+  categories: MenuCategory[];
+  subcategories: MenuSubcategory[];
+  items: MenuItem[];
+  error?: string;
+}
+
+export interface CustomerSubmitFeedbackParams {
+  restaurantId: string;
+  tableNumber: string;
+  qrToken: string;
+  orderId?: string;
+  customerName?: string;
+  rating: number;
+  review?: string;
+  tags?: string[];
+}
+
+export interface CustomerSubmitFeedbackResult {
+  success: boolean;
+  feedbackId?: string;
+  error?: string;
+}
+
+export interface CustomerGetContextParams {
+  restaurantId: string;
+  tableNumber: string;
+  qrToken: string;
+}
+
+export interface CustomerGetContextResult {
+  success: boolean;
+  restaurant?: {
+    id: string;
+    name: string;
+    tagline?: string;
+    address?: string;
+    phone?: string;
+    email?: string;
+    gstin?: string;
+    gstRate?: number;
+    gstEnabled?: boolean;
+    currencySymbol?: string;
+    openingTime?: string;
+    closingTime?: string;
+    logo?: string;
+  };
+  table?: {
+    tableNumber: string;
+    section?: string;
+    capacity?: number;
+    isActive?: boolean;
+  };
+  activeSessionId?: string | null;
+  orders?: Order[];
+  error?: string;
+}
+
+export interface AdminRotateTableQrTokenParams {
+  tableId: string;
+  restaurantId: string;
+}
+
+export interface AdminRotateTableQrTokenResult {
+  success: boolean;
+  newToken?: string;
+  error?: string;
+}
+

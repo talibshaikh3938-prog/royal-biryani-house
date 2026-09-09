@@ -10,10 +10,16 @@ import {
   MessageSquareHeart,
   ChevronRight,
   RefreshCw,
-  X
+  X,
+  AlertCircle
 } from 'lucide-react';
 import { Order, CustomerFeedback } from '../types';
-import { saveCustomerFeedback } from '../lib/supabase';
+import {
+  saveCustomerFeedback,
+  customerSubmitFeedback,
+  getCurrentRestaurantId,
+  getVerifiedCustomerQrContext
+} from '../lib/supabase';
 
 interface CustomerFeedbackCardProps {
   tableNumber: string;
@@ -85,6 +91,8 @@ export const CustomerFeedbackCard: React.FC<CustomerFeedbackCardProps> = ({
   const [isSubmitted, setIsSubmitted] = useState<boolean>(false);
   const [isDismissed, setIsDismissed] = useState<boolean>(false);
 
+  const [submissionError, setSubmissionError] = useState<string | null>(null);
+
   // Reset dismissal if table or target order changes
   useEffect(() => {
     setIsDismissed(false);
@@ -124,37 +132,64 @@ export const CustomerFeedbackCard: React.FC<CustomerFeedbackCardProps> = ({
   };
 
   // Submit feedback
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (rating < 1 || isSubmitting) return;
 
     setIsSubmitting(true);
+    setSubmissionError(null);
 
-    const feedbackId = `FB-${Math.floor(100 + Math.random() * 900)}`;
     const finalCustomerName = guestName.trim() || completedOrder?.customerName || activeOrder?.customerName || 'Dine-in Guest';
     const finalComment = comment.trim() || (rating >= 4 ? 'A wonderful royal dining experience!' : 'Thank you for serving us.');
+    const rid = getCurrentRestaurantId();
+    const effectiveTable = tableNumber || completedOrder?.tableNumber || activeOrder?.tableNumber || 'Table 1';
+    const qrContext = getVerifiedCustomerQrContext(effectiveTable, rid);
 
-    const newFeedback: CustomerFeedback = {
-      id: feedbackId,
-      orderId: targetOrderId || undefined,
-      tableNumber: tableNumber || completedOrder?.tableNumber || 'Table 1',
-      customerName: finalCustomerName,
-      rating,
-      review: finalComment,
-      tags: selectedTags,
-      createdAt: new Date().toISOString()
-    };
+    try {
+      if (qrContext) {
+        const res = await customerSubmitFeedback({
+          restaurantId: rid,
+          tableNumber: qrContext.tableNumber,
+          qrToken: qrContext.qrToken,
+          orderId: targetOrderId || undefined,
+          customerName: finalCustomerName,
+          rating,
+          review: finalComment,
+          tags: selectedTags
+        });
 
-    saveCustomerFeedback(newFeedback);
+        if (!res.success) {
+          setSubmissionError(res.error || 'Failed to submit feedback. Please try again.');
+          setIsSubmitting(false);
+          return;
+        }
+      } else {
+        // Local fallback
+        const feedbackId = `FB-${Math.floor(100 + Math.random() * 900)}`;
+        const newFeedback: CustomerFeedback = {
+          id: feedbackId,
+          restaurant_id: rid,
+          orderId: targetOrderId || undefined,
+          tableNumber: effectiveTable,
+          customerName: finalCustomerName,
+          rating,
+          review: finalComment,
+          tags: selectedTags,
+          createdAt: new Date().toISOString()
+        };
+        saveCustomerFeedback(newFeedback, rid);
+      }
 
-    if (targetOrderId) {
-      markOrderIdAsSubmitted(targetOrderId);
-    }
+      if (targetOrderId) {
+        markOrderIdAsSubmitted(targetOrderId);
+      }
 
-    setTimeout(() => {
       setIsSubmitting(false);
       setIsSubmitted(true);
-    }, 300);
+    } catch (err: any) {
+      setSubmissionError(err?.message || 'Failed to submit feedback.');
+      setIsSubmitting(false);
+    }
   };
 
   // CASE 1: Order is in progress (Before payment settled)
@@ -316,6 +351,13 @@ export const CustomerFeedbackCard: React.FC<CustomerFeedbackCardProps> = ({
 
       {/* Form Content */}
       <form onSubmit={handleSubmit} className="p-5 sm:p-6 space-y-5 bg-[#fdfbf7]">
+        {submissionError && (
+          <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-xs font-semibold flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0 text-red-500" />
+            <span>{submissionError}</span>
+          </div>
+        )}
+
         {/* 1. Star Rating Selector */}
         <div className="text-center space-y-2 py-2 bg-white p-4 rounded-2xl border border-[#e5e1da] shadow-2xs">
           <label className="text-xs font-bold uppercase tracking-wider text-stone-600 block">
