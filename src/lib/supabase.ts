@@ -6466,6 +6466,35 @@ export async function settleDiningSessionAtomic(
     };
   }
 
+  const invalidSplit = params.splitPayments.find(sp => typeof sp.amount !== 'number' || isNaN(sp.amount) || sp.amount <= 0);
+  if (invalidSplit) {
+    return {
+      success: false,
+      isFullyPaid: false,
+      grandTotal: 0,
+      totalPaidNow: 0,
+      paidAmountTotal: 0,
+      remainingAmount: 0,
+      newPayments: [],
+      error: 'Invalid payment amount: Each payment split must be greater than ₹0.'
+    };
+  }
+
+  const validModes = ['Cash', 'UPI', 'Card'];
+  const invalidMode = params.splitPayments.find(sp => !validModes.includes(sp.mode));
+  if (invalidMode) {
+    return {
+      success: false,
+      isFullyPaid: false,
+      grandTotal: 0,
+      totalPaidNow: 0,
+      paidAmountTotal: 0,
+      remainingAmount: 0,
+      newPayments: [],
+      error: `Invalid payment mode: "${invalidMode.mode}". Allowed modes are Cash, UPI, and Card.`
+    };
+  }
+
   const idempotencyKey = params.idempotencyKey || generateSettlementAttemptId(
     params.restaurantId,
     params.sessionId,
@@ -6477,6 +6506,57 @@ export async function settleDiningSessionAtomic(
     mode: sp.mode,
     amount: Math.round(Number(sp.amount) * 100) / 100
   }));
+
+  const totalOffered = formattedSplits.reduce((acc, sp) => acc + sp.amount, 0);
+
+  // Exact Idempotency Check against previously completed attempts
+  const canonicalSplits = [...formattedSplits]
+    .sort((a, b) => a.mode.localeCompare(b.mode) || a.amount - b.amount)
+    .map(s => `${s.mode}:${s.amount.toFixed(2)}`)
+    .join('|');
+  const requestFingerprint = `${params.restaurantId.trim()}|${params.sessionId.trim()}|${params.tableNumber.trim().toLowerCase()}|${totalOffered.toFixed(2)}|${canonicalSplits}`;
+
+  const storedAttemptsRaw = safeStorage.getItem(`rbh_settlement_attempts_${params.restaurantId}`) || '{}';
+  let storedAttempts: Record<string, any> = {};
+  try {
+    storedAttempts = JSON.parse(storedAttemptsRaw);
+  } catch {}
+
+  if (idempotencyKey && storedAttempts[idempotencyKey]) {
+    const existing = storedAttempts[idempotencyKey];
+    if (existing.fingerprint === requestFingerprint && existing.status === 'completed') {
+      return existing.responsePayload;
+    } else {
+      return {
+        success: false,
+        isFullyPaid: false,
+        grandTotal: 0,
+        totalPaidNow: 0,
+        paidAmountTotal: 0,
+        remainingAmount: 0,
+        newPayments: [],
+        error: `IDEMPOTENCY_KEY_REUSE_CONFLICT: Attempt key "${idempotencyKey}" was already used with different parameters.`
+      };
+    }
+  }
+
+  const currentOrders = getStoredOrders(params.restaurantId);
+  const sessionOrders = currentOrders.filter(o => o.sessionId === params.sessionId && o.tableNumber === params.tableNumber);
+  if (sessionOrders.length > 0) {
+    const sessionRemaining = sessionOrders.reduce((sum, o) => sum + (typeof o.remainingAmount === 'number' ? o.remainingAmount : (o.paymentStatus === 'Paid' ? 0 : o.total)), 0);
+    if (totalOffered > sessionRemaining + 0.05) {
+      return {
+        success: false,
+        isFullyPaid: false,
+        grandTotal: sessionOrders.reduce((sum, o) => sum + o.total, 0),
+        totalPaidNow: 0,
+        paidAmountTotal: sessionOrders.reduce((sum, o) => sum + (o.paidAmount || 0), 0),
+        remainingAmount: sessionRemaining,
+        newPayments: [],
+        error: `Payment amount cannot exceed remaining balance (₹${sessionRemaining}).`
+      };
+    }
+  }
 
   if (supabase) {
     try {
@@ -6522,7 +6602,7 @@ export async function settleDiningSessionAtomic(
         : [];
       const mappedPayments: PaymentRecord[] = rawPayments.map(mapSupabaseRowToPayment);
 
-      return {
+      const resultPayload: SettleDiningSessionAtomicResult = {
         success: payload.success !== false,
         isFullyPaid: Boolean(payload.is_fully_paid ?? payload.isFullyPaid),
         grandTotal: Number(payload.grand_total ?? payload.grandTotal ?? 0),
@@ -6531,6 +6611,24 @@ export async function settleDiningSessionAtomic(
         remainingAmount: Number(payload.remaining_amount ?? payload.remainingAmount ?? 0),
         newPayments: mappedPayments
       };
+
+      if (idempotencyKey && resultPayload.success) {
+        storedAttempts[idempotencyKey] = {
+          id: idempotencyKey,
+          restaurantId: params.restaurantId,
+          sessionId: params.sessionId,
+          tableNumber: params.tableNumber,
+          fingerprint: requestFingerprint,
+          status: 'completed',
+          responsePayload: resultPayload,
+          createdAt: new Date().toISOString()
+        };
+        try {
+          safeStorage.setItem(`rbh_settlement_attempts_${params.restaurantId}`, JSON.stringify(storedAttempts));
+        } catch {}
+      }
+
+      return resultPayload;
     } catch (err: any) {
       return {
         success: false,
@@ -6558,7 +6656,7 @@ export async function settleDiningSessionAtomic(
 
     const grandTotal = Math.round(((rec.paidAmountTotal || 0) + (rec.remainingAmount || 0)) * 100) / 100;
 
-    return {
+    const resultPayload: SettleDiningSessionAtomicResult = {
       success: true,
       isFullyPaid: rec.isFullyPaid,
       grandTotal,
@@ -6567,6 +6665,24 @@ export async function settleDiningSessionAtomic(
       remainingAmount: rec.remainingAmount,
       newPayments: rec.newPayments
     };
+
+    if (idempotencyKey) {
+      storedAttempts[idempotencyKey] = {
+        id: idempotencyKey,
+        restaurantId: params.restaurantId,
+        sessionId: params.sessionId,
+        tableNumber: params.tableNumber,
+        fingerprint: requestFingerprint,
+        status: 'completed',
+        responsePayload: resultPayload,
+        createdAt: new Date().toISOString()
+      };
+      try {
+        safeStorage.setItem(`rbh_settlement_attempts_${params.restaurantId}`, JSON.stringify(storedAttempts));
+      } catch {}
+    }
+
+    return resultPayload;
   } catch (err: any) {
     return {
       success: false,
