@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { ChefHat, Bell, Clock, MapPin, CheckCircle, ArrowRight, Check, AlertCircle, UtensilsCrossed, Volume2, Search, Filter, RefreshCw, Flame, CheckCheck, Boxes, Loader2, Printer } from 'lucide-react';
-import { Order, OrderStatus, MenuItem } from '../types';
+import { Order, OrderStatus, MenuItem, RestaurantSettings } from '../types';
 import { playKitchenChime } from '../lib/supabase';
 import { RawMaterialsInventory } from './RawMaterialsInventory';
 import { ThermalKotModal } from './print/ThermalKotModal';
@@ -12,6 +12,7 @@ interface KitchenDashboardProps {
   onToggleItemAvailability: (id: string | number, available: boolean) => void | Promise<void>;
   onBackToCustomer: () => void;
   onRefreshOrders: () => void;
+  restaurantSettings?: RestaurantSettings;
 }
 
 export const KitchenDashboard: React.FC<KitchenDashboardProps> = ({
@@ -21,6 +22,7 @@ export const KitchenDashboard: React.FC<KitchenDashboardProps> = ({
   onToggleItemAvailability,
   onBackToCustomer,
   onRefreshOrders,
+  restaurantSettings,
 }) => {
   const [selectedStatusFilter, setSelectedStatusFilter] = useState<'All' | OrderStatus>('All');
   const [searchQuery, setSearchQuery] = useState('');
@@ -94,7 +96,7 @@ export const KitchenDashboard: React.FC<KitchenDashboardProps> = ({
           <div>
             <h2 className="serif text-3xl sm:text-4xl text-[#5c1b1b] font-bold">Kitchen Command</h2>
             <p className="text-xs text-stone-500 uppercase tracking-widest mt-1 font-semibold">
-              Royal Biryani House | KDS Kitchen Display Station
+              {restaurantSettings?.name || 'Royal Biryani House'} | KDS Kitchen Display Station
             </p>
           </div>
 

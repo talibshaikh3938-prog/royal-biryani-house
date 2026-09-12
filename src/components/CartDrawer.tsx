@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { X, ShoppingBag, Trash2, Plus, Minus, CreditCard, ChevronRight, Sparkles, MapPin, User, MessageSquare, AlertCircle } from 'lucide-react';
-import { CartItem } from '../types';
+import { CartItem, RestaurantSettings } from '../types';
 
 interface CartDrawerProps {
   isOpen: boolean;
@@ -14,6 +14,7 @@ interface CartDrawerProps {
   onPlaceOrder: (customerName: string, notes: string) => Promise<void>;
   isPlacingOrder: boolean;
   errorMessage?: string | null;
+  restaurantSettings?: RestaurantSettings;
 }
 
 export const CartDrawer: React.FC<CartDrawerProps> = ({
@@ -28,6 +29,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
   onPlaceOrder,
   isPlacingOrder,
   errorMessage,
+  restaurantSettings,
 }) => {
   const [customerName, setCustomerName] = useState('');
   const [orderNotes, setOrderNotes] = useState('');
@@ -35,7 +37,9 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
   if (!isOpen) return null;
 
   const subtotal = cartItems.reduce((sum, ci) => sum + ci.item.Price * ci.quantity, 0);
-  const tax = Math.round(subtotal * 0.05 * 10) / 10; // 5% GST
+  const gstEnabled = restaurantSettings?.gstEnabled !== false;
+  const gstRate = gstEnabled ? (typeof restaurantSettings?.gstRate === 'number' ? restaurantSettings.gstRate : 5.0) : 0;
+  const tax = Math.round(subtotal * (gstRate / 100) * 10) / 10;
   const total = subtotal + tax;
   const totalQuantity = cartItems.reduce((sum, ci) => sum + ci.quantity, 0);
 
@@ -252,7 +256,7 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                   <span className="font-serif font-bold text-[#1a1a1a]">₹{subtotal}</span>
                 </div>
                 <div className="flex justify-between text-stone-600">
-                  <span>Restaurant GST (5%)</span>
+                  <span>Restaurant GST ({gstRate}%)</span>
                   <span className="font-serif font-bold text-[#1a1a1a]">₹{tax}</span>
                 </div>
                 <div className="pt-2 border-t border-[#e5e1da] flex justify-between items-center">

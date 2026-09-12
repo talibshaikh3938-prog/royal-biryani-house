@@ -47,9 +47,18 @@ const RATING_DESCRIPTIONS: Record<number, string> = {
 
 const SUBMITTED_FEEDBACK_KEY = 'rbh_submitted_feedback_orders';
 
-function getSubmittedOrderIds(): string[] {
+function getFeedbackStorageKey(restaurantId: string = getCurrentRestaurantId()): string {
+  const cleanRid = (restaurantId || 'rbh-main-branch').trim().toLowerCase();
+  return `${SUBMITTED_FEEDBACK_KEY}:${cleanRid}`;
+}
+
+function getSubmittedOrderIds(restaurantId: string = getCurrentRestaurantId()): string[] {
   try {
-    const saved = localStorage.getItem(SUBMITTED_FEEDBACK_KEY);
+    const key = getFeedbackStorageKey(restaurantId);
+    let saved = localStorage.getItem(key);
+    if (!saved && restaurantId === 'rbh-main-branch') {
+      saved = localStorage.getItem(SUBMITTED_FEEDBACK_KEY);
+    }
     if (saved) return JSON.parse(saved);
   } catch (e) {
     // Ignore
@@ -57,11 +66,15 @@ function getSubmittedOrderIds(): string[] {
   return [];
 }
 
-function markOrderIdAsSubmitted(orderId: string): void {
+function markOrderIdAsSubmitted(orderId: string, restaurantId: string = getCurrentRestaurantId()): void {
   try {
-    const current = getSubmittedOrderIds();
+    const key = getFeedbackStorageKey(restaurantId);
+    const current = getSubmittedOrderIds(restaurantId);
     if (!current.includes(orderId)) {
-      localStorage.setItem(SUBMITTED_FEEDBACK_KEY, JSON.stringify([...current, orderId]));
+      localStorage.setItem(key, JSON.stringify([...current, orderId]));
+      if (restaurantId === 'rbh-main-branch') {
+        localStorage.setItem(SUBMITTED_FEEDBACK_KEY, JSON.stringify([...current, orderId]));
+      }
     }
   } catch (e) {
     // Ignore

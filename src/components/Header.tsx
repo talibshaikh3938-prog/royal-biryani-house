@@ -1,6 +1,7 @@
 import React from 'react';
 import { UtensilsCrossed, ChefHat, MapPin, Database, Sparkles, RefreshCw, QrCode, Store, Lock, LogOut } from 'lucide-react';
-import { Order } from '../types';
+import { Order, RestaurantSettings } from '../types';
+import { JarvisIndicator } from '../jarvis/JarvisIndicator';
 
 interface HeaderProps {
   currentView: 'customer' | 'kitchen' | 'counter';
@@ -17,6 +18,7 @@ interface HeaderProps {
   onOpenQrModal: () => void;
   onRefreshMenu: () => void;
   isRefreshing: boolean;
+  restaurantSettings?: RestaurantSettings;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -34,6 +36,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenQrModal,
   onRefreshMenu,
   isRefreshing,
+  restaurantSettings,
 }) => {
   return (
     <header className="sticky top-0 z-40 bg-[#fdfbf7]/95 backdrop-blur-md border-b border-[#e5e1da] shadow-sm">
@@ -42,21 +45,24 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             {isStaffAuthenticated && currentView !== 'customer' && (
-              <button
-                id="supabase-status-btn"
-                onClick={onOpenSupabaseSettings}
-                className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full font-medium transition-all text-[11px] ${
-                  supabaseConnected
-                    ? 'bg-emerald-50 text-emerald-800 border border-emerald-300 hover:bg-emerald-100'
-                    : 'bg-amber-50 text-[#5c1b1b] border border-[#d4af37]/40 hover:bg-amber-100'
-                }`}
-                title="Click to configure Supabase Database"
-              >
-                <span className={`w-2 h-2 rounded-full ${supabaseConnected ? 'bg-emerald-500 animate-pulse' : 'bg-[#d4af37]'}`} />
-                <Database className="w-3 h-3 text-[#5c1b1b]" />
-                <span className="hidden sm:inline">Database:</span>
-                <span className="font-semibold">{supabaseConnected ? 'Supabase Connected' : 'Demo DB Mode'}</span>
-              </button>
+              <>
+                <button
+                  id="supabase-status-btn"
+                  onClick={onOpenSupabaseSettings}
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full font-medium transition-all text-[11px] ${
+                    supabaseConnected
+                      ? 'bg-emerald-50 text-emerald-800 border border-emerald-300 hover:bg-emerald-100'
+                      : 'bg-amber-50 text-[#5c1b1b] border border-[#d4af37]/40 hover:bg-amber-100'
+                  }`}
+                  title="Click to configure Supabase Database"
+                >
+                  <span className={`w-2 h-2 rounded-full ${supabaseConnected ? 'bg-emerald-500 animate-pulse' : 'bg-[#d4af37]'}`} />
+                  <Database className="w-3 h-3 text-[#5c1b1b]" />
+                  <span className="hidden sm:inline">Database:</span>
+                  <span className="font-semibold">{supabaseConnected ? 'Supabase Connected' : 'Demo DB Mode'}</span>
+                </button>
+                <JarvisIndicator restaurantId={restaurantSettings?.id || 'rbh-main-branch'} />
+              </>
             )}
 
             <button
@@ -157,15 +163,15 @@ export const Header: React.FC<HeaderProps> = ({
           <div>
             <div className="flex items-center gap-2">
               <h1 className="serif text-xl sm:text-2xl font-bold text-[#5c1b1b] tracking-tight">
-                Royal Biryani House
+                {restaurantSettings?.name || 'Royal Biryani House'}
               </h1>
               <span className="hidden sm:inline-block px-2 py-0.5 rounded-full bg-[#5c1b1b]/10 text-[#5c1b1b] text-[10px] font-bold tracking-wider uppercase border border-[#5c1b1b]/20">
-                Awadhi & Hyderabadi
+                {restaurantSettings?.cuisine_type || 'Awadhi & Hyderabadi'}
               </span>
             </div>
             <p className="text-xs text-stone-500 flex items-center gap-1 font-medium tracking-wide">
               <Sparkles className="w-3 h-3 text-[#d4af37]" />
-              <span>Contactless Dining • The Authentic Taste of Awadh</span>
+              <span>{restaurantSettings?.tagline ? `Contactless Dining • ${restaurantSettings.tagline}` : 'Contactless Dining • The Authentic Taste of Awadh'}</span>
             </p>
           </div>
         </div>

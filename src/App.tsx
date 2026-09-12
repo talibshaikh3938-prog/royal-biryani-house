@@ -22,7 +22,7 @@ import {
   QrCode,
   AlertCircle
 } from 'lucide-react';
-import { MenuItem, CartItem, Order, OrderStatus, CustomerFeedback, StaffProfile, SecureOrderItemInput } from './types';
+import { MenuItem, CartItem, Order, OrderStatus, CustomerFeedback, StaffProfile, SecureOrderItemInput, RestaurantSettings } from './types';
 import { 
   fetchMenuItems, 
   updateMenuItemAvailability, 
@@ -48,7 +48,11 @@ import {
   getCurrentRestaurantId,
   createOrderSecure,
   customerGetMenuByQr,
-  customerGetContext
+  customerGetContext,
+  getRestaurantMetadata,
+  getStoredRestaurantSettings,
+  getStaffRoleStorageKey,
+  DEFAULT_RESTAURANT_ID
 } from './lib/supabase';
 import { DEFAULT_MENU_ITEMS } from './data/defaultMenu';
 import { Header } from './components/Header';
@@ -64,15 +68,28 @@ import { TableSelectorModal } from './components/TableSelectorModal';
 import { SupabaseSettingsModal } from './components/SupabaseSettingsModal';
 import { TableQrModal } from './components/TableQrModal';
 import { StaffAccessModal } from './components/StaffAccessModal';
+import { RestaurantNotFound } from './components/RestaurantNotFound';
+import { JarvisErrorBoundary } from './jarvis/JarvisErrorBoundary';
 
 export default function App() {
   // App views
   const [currentView, setCurrentView] = useState<'customer' | 'kitchen' | 'counter'>('customer');
 
-  // Staff Authentication & Role-Based Access Control
+  // Tenant / Restaurant state
+  const [restaurantSettings, setRestaurantSettings] = useState<RestaurantSettings>(() => getStoredRestaurantSettings());
+  const [isRestaurantNotFound, setIsRestaurantNotFound] = useState<boolean>(false);
+  const [requestedSlug, setRequestedSlug] = useState<string>('');
+  const [isLoadingTenant, setIsLoadingTenant] = useState<boolean>(true);
+
+  // Staff Authentication & Role-Based Access Control (Tenant-Isolated)
   const [staffRole, setStaffRole] = useState<'none' | 'kitchen' | 'counter' | 'admin'>(() => {
     try {
-      const saved = sessionStorage.getItem('rbh_staff_role');
+      const currentRid = getCurrentRestaurantId();
+      const staffKey = getStaffRoleStorageKey(currentRid);
+      let saved = sessionStorage.getItem(staffKey);
+      if (!saved && currentRid === DEFAULT_RESTAURANT_ID) {
+        saved = sessionStorage.getItem('rbh_staff_role');
+      }
       return (saved === 'kitchen' || saved === 'counter' || saved === 'admin') ? saved : 'none';
     } catch {
       return 'none';
@@ -209,6 +226,49 @@ export default function App() {
     } catch (e) {
       console.warn('URL parsing error', e);
     }
+  }, []);
+
+  // Tenant Discovery & Validation
+  useEffect(() => {
+    let isMounted = true;
+    async function resolveTenant() {
+      try {
+        const params = new URLSearchParams(window.location.search);
+        const slugParam = params.get('restaurant') || params.get('rid') || params.get('restaurant_id') || 'rbh-main-branch';
+        setRequestedSlug(slugParam);
+        const metaRes = await getRestaurantMetadata(slugParam);
+        if (!isMounted) return;
+
+        if (!metaRes.found || !metaRes.metadata) {
+          setIsRestaurantNotFound(true);
+          setIsLoadingTenant(false);
+          return;
+        }
+
+        setIsRestaurantNotFound(false);
+        const meta = metaRes.metadata;
+        const currentSettings = getStoredRestaurantSettings(meta.id);
+        const updatedSettings: RestaurantSettings = {
+          ...currentSettings,
+          name: meta.name || currentSettings.name,
+          cuisine_type: meta.cuisine_type || currentSettings.cuisine_type,
+          gstRate: typeof meta.gst_rate === 'number' ? meta.gst_rate : currentSettings.gstRate,
+          currencySymbol: meta.currency_symbol || currentSettings.currencySymbol || '₹',
+          tagline: meta.tagline || currentSettings.tagline,
+          slug: meta.slug
+        };
+        setRestaurantSettings(updatedSettings);
+        if (typeof document !== 'undefined') {
+          document.title = `${updatedSettings.name} | Contactless RMS`;
+        }
+      } catch (err) {
+        console.warn('Error resolving restaurant metadata', err);
+      } finally {
+        if (isMounted) setIsLoadingTenant(false);
+      }
+    }
+    resolveTenant();
+    return () => { isMounted = false; };
   }, []);
 
   // 2. Load orders and listen for updates
@@ -705,7 +765,12 @@ export default function App() {
   const handleStaffAuthenticated = (role: 'kitchen' | 'counter', profile?: StaffProfile) => {
     setStaffRole(role);
     try {
-      sessionStorage.setItem('rbh_staff_role', role);
+      const currentRid = getCurrentRestaurantId();
+      const staffKey = getStaffRoleStorageKey(currentRid);
+      sessionStorage.setItem(staffKey, role);
+      if (currentRid === DEFAULT_RESTAURANT_ID) {
+        sessionStorage.setItem('rbh_staff_role', role);
+      }
     } catch {}
     setCurrentView(role);
   };
@@ -714,7 +779,12 @@ export default function App() {
     await signOutStaff();
     setStaffRole('none');
     try {
-      sessionStorage.removeItem('rbh_staff_role');
+      const currentRid = getCurrentRestaurantId();
+      const staffKey = getStaffRoleStorageKey(currentRid);
+      sessionStorage.removeItem(staffKey);
+      if (currentRid === DEFAULT_RESTAURANT_ID) {
+        sessionStorage.removeItem('rbh_staff_role');
+      }
     } catch {}
     setCurrentView('customer');
   };
@@ -799,6 +869,17 @@ export default function App() {
     }).length;
   }, [activeOrders]);
 
+  if (isRestaurantNotFound) {
+    return (
+      <RestaurantNotFound
+        requestedSlug={requestedSlug}
+        onBackToDefault={() => {
+          window.location.href = window.location.pathname;
+        }}
+      />
+    );
+  }
+
   return (
     <div className="min-h-screen bg-[#fdfbf7] text-[#1a1a1a] flex flex-col selection:bg-[#d4af37] selection:text-white">
       {/* Universal Header */}
@@ -821,17 +902,20 @@ export default function App() {
         onOpenQrModal={() => setIsQrModalOpen(true)}
         onRefreshMenu={loadMenu}
         isRefreshing={isRefreshing}
+        restaurantSettings={restaurantSettings}
       />
 
-      {/* Main Content Area */}
-      {currentView === 'kitchen' ? (
-        <KitchenDashboard
+      {/* Main Content Area Protected by JARVIS Reliability Layer */}
+      <JarvisErrorBoundary restaurantId={restaurantSettings?.id || getCurrentRestaurantId()}>
+        {currentView === 'kitchen' ? (
+          <KitchenDashboard
           orders={activeOrders}
           onUpdateOrderStatus={handleUpdateOrderStatus}
           menuItems={menuItems}
           onToggleItemAvailability={handleToggleItemAvailability}
           onBackToCustomer={() => setCurrentView('customer')}
           onRefreshOrders={loadOrders}
+          restaurantSettings={restaurantSettings}
         />
       ) : currentView === 'counter' ? (
         <CounterDashboard
@@ -857,15 +941,15 @@ export default function App() {
               <div className="space-y-2.5 max-w-2xl">
                 <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/10 border border-white/20 text-amber-200 text-xs font-bold tracking-widest uppercase">
                   <Sparkles className="w-3.5 h-3.5 text-[#d4af37]" />
-                  <span>The Authentic Taste of Awadh • Table QR</span>
+                  <span>{restaurantSettings?.tagline || 'The Authentic Taste of Awadh • Table QR'}</span>
                 </div>
 
                 <h2 className="serif text-3xl sm:text-4xl font-bold text-white leading-tight tracking-tight">
-                  Royal Biryani House
+                  {restaurantSettings?.name || 'Royal Biryani House'}
                 </h2>
 
                 <p className="text-xs sm:text-sm text-stone-200 leading-relaxed font-normal opacity-90">
-                  Slow-cooked in handis on charcoal dum with pure saffron, whole aromatic spices, and tender cuts. Scan, browse, and order directly to your table.
+                  {restaurantSettings?.description || 'Slow-cooked in handis on charcoal dum with pure saffron, whole aromatic spices, and tender cuts. Scan, browse, and order directly to your table.'}
                 </p>
               </div>
 
@@ -1142,6 +1226,7 @@ export default function App() {
           </div>
         </main>
       )}
+      </JarvisErrorBoundary>
 
       {/* Floating Bottom Cart Bar (Customer View - Editorial Aesthetic) */}
       {currentView === 'customer' && cartItems.length > 0 && (
@@ -1199,6 +1284,7 @@ export default function App() {
         onPlaceOrder={handlePlaceOrder}
         isPlacingOrder={isPlacingOrder}
         errorMessage={orderErrorMessage}
+        restaurantSettings={restaurantSettings}
       />
 
       {/* Order Placed Live Tracking & Confirmation Modal - Customer Only */}

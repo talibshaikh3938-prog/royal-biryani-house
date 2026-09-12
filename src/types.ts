@@ -102,6 +102,8 @@ export interface RestaurantSettings {
   id: string;
   restaurant_id?: string;
   name: string;
+  slug?: string;
+  cuisine_type?: string;
   restaurant_name?: string;
   logo?: string;
   logo_url?: string;
@@ -125,6 +127,37 @@ export interface RestaurantSettings {
   currencySymbol?: string; // '₹'
   created_at?: string;
   updated_at?: string;
+}
+
+export interface RestaurantMetadata {
+  id: string;
+  name: string;
+  slug: string;
+  cuisine_type?: string;
+  status: string;
+  is_active?: boolean;
+  logo?: string;
+  tagline?: string;
+  description?: string;
+  address?: string;
+  phone?: string;
+  gstEnabled: boolean;
+  gstRate: number;
+  gst_rate?: number;
+  serviceChargeEnabled: boolean;
+  serviceChargeRate: number;
+  currencySymbol: string;
+  currency_symbol?: string;
+  openingTime?: string;
+  closingTime?: string;
+}
+
+export interface RestaurantMetadataResult {
+  success: boolean;
+  found?: boolean;
+  restaurant?: RestaurantMetadata;
+  metadata?: RestaurantMetadata;
+  error?: string;
 }
 
 export interface BulkImportRow {

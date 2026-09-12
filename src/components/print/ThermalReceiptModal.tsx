@@ -52,7 +52,9 @@ export const ThermalReceiptModal: React.FC<ThermalReceiptModalProps> = ({
     return `INV-${sessionData.tableNumber.replace(/\s+/g, '')}-${Date.now().toString().slice(-6)}`;
   }, [sessionData]);
 
-  // Tax calculations (5% standard restaurant GST split 2.5% CGST + 2.5% SGST)
+  // Tax calculations (standard restaurant GST split into CGST + SGST)
+  const effectiveGstRate = settings.gstEnabled !== false ? (typeof settings.gstRate === 'number' ? settings.gstRate : 5.0) : 0;
+  const halfRate = Math.round((effectiveGstRate / 2) * 10) / 10;
   const totalTax = Math.round((sessionData.tax || 0) * 100) / 100;
   const cgst = Math.round((totalTax / 2) * 100) / 100;
   const sgst = Math.round((totalTax - cgst) * 100) / 100;
@@ -227,18 +229,27 @@ export const ThermalReceiptModal: React.FC<ThermalReceiptModalProps> = ({
                 <span>Subtotal (Taxable):</span>
                 <span>{formatCurrency(sessionData.subtotal)}</span>
               </div>
-              <div className="flex justify-between text-stone-600 text-[10px]">
-                <span>CGST (2.5%):</span>
-                <span>{formatCurrency(cgst)}</span>
-              </div>
-              <div className="flex justify-between text-stone-600 text-[10px]">
-                <span>SGST (2.5%):</span>
-                <span>{formatCurrency(sgst)}</span>
-              </div>
-              <div className="flex justify-between text-stone-700">
-                <span>Total GST (5.0%):</span>
-                <span>{formatCurrency(totalTax)}</span>
-              </div>
+              {effectiveGstRate > 0 ? (
+                <>
+                  <div className="flex justify-between text-stone-600 text-[10px]">
+                    <span>CGST ({halfRate}%):</span>
+                    <span>{formatCurrency(cgst)}</span>
+                  </div>
+                  <div className="flex justify-between text-stone-600 text-[10px]">
+                    <span>SGST ({halfRate}%):</span>
+                    <span>{formatCurrency(sgst)}</span>
+                  </div>
+                  <div className="flex justify-between text-stone-700">
+                    <span>Total GST ({effectiveGstRate}%):</span>
+                    <span>{formatCurrency(totalTax)}</span>
+                  </div>
+                </>
+              ) : (
+                <div className="flex justify-between text-stone-600 text-[10px]">
+                  <span>GST (Exempt/Disabled):</span>
+                  <span>{formatCurrency(0)}</span>
+                </div>
+              )}
               <div className="flex justify-between font-bold text-xs pt-1 border-t border-stone-300">
                 <span className="uppercase">GRAND TOTAL:</span>
                 <span>{formatCurrency(sessionData.totalAmount)}</span>

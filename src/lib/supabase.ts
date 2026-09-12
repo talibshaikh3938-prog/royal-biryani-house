@@ -44,7 +44,9 @@ import {
   CustomerGetContextParams,
   CustomerGetContextResult,
   AdminRotateTableQrTokenParams,
-  AdminRotateTableQrTokenResult
+  AdminRotateTableQrTokenResult,
+  RestaurantMetadata,
+  RestaurantMetadataResult
 } from '../types';
 import { DEFAULT_MENU_ITEMS } from '../data/defaultMenu';
 import { 
@@ -55,6 +57,7 @@ import {
   DEFAULT_WASTAGE_RECORDS
 } from '../data/defaultRawMaterials';
 import { INITIAL_HISTORICAL_ORDERS } from '../data/defaultOrders';
+import { jarvis, assertNonCriticalOperation } from '../jarvis';
 
 // Default Restaurant Identifier
 export const DEFAULT_RESTAURANT_ID = 'rbh-main-branch';
@@ -263,17 +266,26 @@ export const DEFAULT_MENU_SUBCATEGORIES: MenuSubcategory[] = [
   { id: 'sub-mocktails', restaurant_id: DEFAULT_RESTAURANT_ID, categoryId: 'cat-beverages', name: 'Lassi & Mocktails', description: 'Fresh churned yogurt and fruit coolers', displayOrder: 3, isActive: true }
 ];
 
+// Known Tenant Aliases (Slug -> Canonical Database restaurant_id)
+const KNOWN_SLUG_MAP: Record<string, string> = {
+  'rbh-main-branch': 'rbh-main-branch',
+  'royal-biryani-house': 'rbh-main-branch',
+  'urban-tadka': 'urban-tadka-curry',
+  'urban-tadka-curry': 'urban-tadka-curry'
+};
+
 // Multi-tenant Restaurant ID Management (Single Source of Truth)
 export function getCurrentRestaurantId(): string {
   try {
     if (typeof window !== 'undefined' && window.location) {
       const params = new URLSearchParams(window.location.search);
-      const rid = params.get('restaurant_id') || params.get('rid') || params.get('restaurant');
+      const rid = params.get('restaurant') || params.get('rid') || params.get('restaurant_id');
       if (rid && rid.trim()) {
         const clean = rid.trim().toLowerCase();
+        const mappedId = KNOWN_SLUG_MAP[clean] || safeStorage.getItem(`rbh_slug_map:${clean}`) || clean;
         // sync to storage for persistent session
-        safeStorage.setItem(ACTIVE_RESTAURANT_KEY, clean);
-        return clean;
+        safeStorage.setItem(ACTIVE_RESTAURANT_KEY, mappedId);
+        return mappedId;
       }
     }
     const saved = safeStorage.getItem(ACTIVE_RESTAURANT_KEY);
@@ -284,7 +296,7 @@ export function getCurrentRestaurantId(): string {
         safeStorage.setItem(ACTIVE_RESTAURANT_KEY, DEFAULT_RESTAURANT_ID);
         return DEFAULT_RESTAURANT_ID;
       }
-      return clean;
+      return KNOWN_SLUG_MAP[clean] || clean;
     }
   } catch (e) {
     // fallback
@@ -294,12 +306,124 @@ export function getCurrentRestaurantId(): string {
 
 export function setCurrentRestaurantId(restaurantId: string): void {
   const clean = restaurantId.trim().toLowerCase() || DEFAULT_RESTAURANT_ID;
+  const targetId = KNOWN_SLUG_MAP[clean] || clean;
   try {
-    safeStorage.setItem(ACTIVE_RESTAURANT_KEY, clean);
-    safeDispatchEvent(new CustomEvent('rbh_restaurant_changed', { detail: { restaurantId: clean } }));
+    safeStorage.setItem(ACTIVE_RESTAURANT_KEY, targetId);
+    safeDispatchEvent(new CustomEvent('rbh_restaurant_changed', { detail: { restaurantId: targetId } }));
   } catch (e) {
     console.error('Failed to set restaurant ID', e);
   }
+}
+
+/**
+ * Public Tenant Discovery: Resolves restaurant tenant profile, branding, and tax settings
+ * via database RPC get_restaurant_metadata(p_slug) with full fallback for offline/demo operation.
+ */
+export async function getRestaurantMetadata(slug: string): Promise<RestaurantMetadataResult> {
+  const cleanSlug = (slug || '').trim().toLowerCase();
+  const targetSlug = cleanSlug || DEFAULT_RESTAURANT_ID;
+
+  const supabase = getSupabaseClient();
+  if (supabase) {
+    try {
+      const { data, error } = await supabase.rpc('get_restaurant_metadata', {
+        p_slug: targetSlug
+      });
+
+      if (!error && data) {
+        if (typeof data === 'object' && data.success && data.restaurant) {
+          // Cache slug-to-ID mapping
+          try {
+            safeStorage.setItem(`rbh_slug_map:${targetSlug}`, data.restaurant.id);
+            if (data.restaurant.slug) {
+              safeStorage.setItem(`rbh_slug_map:${data.restaurant.slug}`, data.restaurant.id);
+            }
+          } catch {}
+          const metaObj = (data.restaurant || data.metadata) as RestaurantMetadata;
+          return {
+            success: true,
+            found: true,
+            restaurant: metaObj,
+            metadata: metaObj
+          };
+        }
+        if (data.error === 'RESTAURANT_NOT_FOUND' || data.success === false) {
+          return { success: false, found: false, error: 'RESTAURANT_NOT_FOUND' };
+        }
+      }
+    } catch (err: any) {
+      console.warn('getRestaurantMetadata RPC query error:', err.message);
+    }
+  }
+
+  // Fallback / Offline / Demo mode metadata lookup
+  if (targetSlug === 'rbh-main-branch' || targetSlug === 'royal-biryani-house' || targetSlug === '' || targetSlug === 'rbh') {
+    const rbhMeta: RestaurantMetadata = {
+      id: DEFAULT_RESTAURANT_ID,
+      name: 'Royal Biryani House',
+      slug: 'rbh-main-branch',
+      cuisine_type: 'Authentic Dum Biryani & Mughlai',
+      status: 'active',
+      is_active: true,
+      logo: '',
+      tagline: 'Authentic Dum Biryani & Mughlai Cuisine',
+      description: 'Slow-cooked in handis on charcoal dum with pure saffron, whole aromatic spices, and tender cuts. Scan, browse, and order directly to your table.',
+      address: '124 Heritage Lane, Connaught Place, New Delhi',
+      phone: '+91 98765 43210',
+      gstEnabled: true,
+      gstRate: 5.0,
+      gst_rate: 5.0,
+      serviceChargeEnabled: false,
+      serviceChargeRate: 0.0,
+      currencySymbol: '₹',
+      currency_symbol: '₹',
+      openingTime: '11:00 AM',
+      closingTime: '11:00 PM'
+    };
+    return {
+      success: true,
+      found: true,
+      restaurant: rbhMeta,
+      metadata: rbhMeta
+    };
+  }
+
+  if (targetSlug === 'urban-tadka' || targetSlug === 'urban-tadka-curry') {
+    const urbanMeta: RestaurantMetadata = {
+      id: 'urban-tadka-curry',
+      name: 'Urban Tadka Curry',
+      slug: 'urban-tadka',
+      cuisine_type: 'North Indian & Mughlai',
+      status: 'active',
+      is_active: true,
+      logo: '',
+      tagline: 'Sizzling Tandoor & Highway Curries',
+      description: 'Authentic rich curries, buttery naans, and smoky kebabs straight from the clay tandoor.',
+      address: '45 Ring Road, Sector 18, Noida',
+      phone: '+91 98111 22334',
+      gstEnabled: true,
+      gstRate: 12.0,
+      gst_rate: 12.0,
+      serviceChargeEnabled: true,
+      serviceChargeRate: 5.0,
+      currencySymbol: '₹',
+      currency_symbol: '₹',
+      openingTime: '12:00 PM',
+      closingTime: '11:30 PM'
+    };
+    return {
+      success: true,
+      found: true,
+      restaurant: urbanMeta,
+      metadata: urbanMeta
+    };
+  }
+
+  return {
+    success: false,
+    found: false,
+    error: 'RESTAURANT_NOT_FOUND'
+  };
 }
 
 // Stable Public App URL Builder for QR Code Stands
@@ -351,13 +475,50 @@ export function getPublicAppUrl(tableParam?: string, restaurantId?: string, expl
 
 // Tenant-scoped Storage Key Generator
 export function getTenantStorageKey(baseKey: string, restaurantId: string = getCurrentRestaurantId()): string {
-  return `${baseKey}_${restaurantId}`;
+  const cleanRid = (restaurantId || getCurrentRestaurantId() || DEFAULT_RESTAURANT_ID).trim().toLowerCase();
+  return `${baseKey}:${cleanRid}`;
 }
 
-// Staff Profile Storage Management
-export function getCurrentStaffProfile(): StaffProfile | null {
+// Tenant-scoped Storage Get/Set Helpers with Seamless Legacy Fallback
+export function getTenantStorageItem(baseKey: string, restaurantId: string = getCurrentRestaurantId()): string | null {
+  const cleanRid = (restaurantId || getCurrentRestaurantId() || DEFAULT_RESTAURANT_ID).trim().toLowerCase();
+  const primaryKey = `${baseKey}:${cleanRid}`;
+  const legacyKey = `${baseKey}_${cleanRid}`;
+  return safeStorage.getItem(primaryKey) 
+    || safeStorage.getItem(legacyKey) 
+    || (cleanRid === DEFAULT_RESTAURANT_ID ? safeStorage.getItem(baseKey) : null);
+}
+
+export function setTenantStorageItem(baseKey: string, value: string, restaurantId: string = getCurrentRestaurantId()): void {
+  const cleanRid = (restaurantId || getCurrentRestaurantId() || DEFAULT_RESTAURANT_ID).trim().toLowerCase();
+  const primaryKey = `${baseKey}:${cleanRid}`;
+  safeStorage.setItem(primaryKey, value);
+  if (cleanRid === DEFAULT_RESTAURANT_ID) {
+    safeStorage.setItem(baseKey, value);
+  }
+}
+
+export function removeTenantStorageItem(baseKey: string, restaurantId: string = getCurrentRestaurantId()): void {
+  const cleanRid = (restaurantId || getCurrentRestaurantId() || DEFAULT_RESTAURANT_ID).trim().toLowerCase();
+  safeStorage.removeItem(`${baseKey}:${cleanRid}`);
+  safeStorage.removeItem(`${baseKey}_${cleanRid}`);
+  if (cleanRid === DEFAULT_RESTAURANT_ID) {
+    safeStorage.removeItem(baseKey);
+  }
+}
+
+// Staff Role Storage Key Helper
+export function getStaffRoleStorageKey(restaurantId: string = getCurrentRestaurantId()): string {
+  const cleanRid = (restaurantId || getCurrentRestaurantId() || DEFAULT_RESTAURANT_ID).trim().toLowerCase();
+  return `rbh_staff_role:${cleanRid}`;
+}
+
+// Staff Profile Storage Management (Tenant-Scoped)
+export function getCurrentStaffProfile(restaurantId: string = getCurrentRestaurantId()): StaffProfile | null {
+  const cleanRid = (restaurantId || getCurrentRestaurantId() || DEFAULT_RESTAURANT_ID).trim().toLowerCase();
   try {
-    const saved = safeSession.getItem(STAFF_PROFILE_STORAGE_KEY);
+    const tenantKey = getTenantStorageKey(STAFF_PROFILE_STORAGE_KEY, cleanRid);
+    const saved = safeSession.getItem(tenantKey) || (cleanRid === DEFAULT_RESTAURANT_ID ? safeSession.getItem(STAFF_PROFILE_STORAGE_KEY) : null);
     if (saved) {
       return JSON.parse(saved);
     }
@@ -367,16 +528,27 @@ export function getCurrentStaffProfile(): StaffProfile | null {
   return null;
 }
 
-export function saveCurrentStaffProfile(profile: StaffProfile | null): void {
+export function saveCurrentStaffProfile(profile: StaffProfile | null, restaurantId: string = getCurrentRestaurantId()): void {
+  const cleanRid = (restaurantId || getCurrentRestaurantId() || DEFAULT_RESTAURANT_ID).trim().toLowerCase();
   try {
+    const tenantKey = getTenantStorageKey(STAFF_PROFILE_STORAGE_KEY, cleanRid);
+    const roleKey = getStaffRoleStorageKey(cleanRid);
     if (profile) {
-      safeSession.setItem(STAFF_PROFILE_STORAGE_KEY, JSON.stringify(profile));
-      safeSession.setItem('rbh_staff_role', profile.role);
+      safeSession.setItem(tenantKey, JSON.stringify(profile));
+      safeSession.setItem(roleKey, profile.role);
+      if (cleanRid === DEFAULT_RESTAURANT_ID) {
+        safeSession.setItem(STAFF_PROFILE_STORAGE_KEY, JSON.stringify(profile));
+        safeSession.setItem('rbh_staff_role', profile.role);
+      }
     } else {
-      safeSession.removeItem(STAFF_PROFILE_STORAGE_KEY);
-      safeSession.removeItem('rbh_staff_role');
+      safeSession.removeItem(tenantKey);
+      safeSession.removeItem(roleKey);
+      if (cleanRid === DEFAULT_RESTAURANT_ID) {
+        safeSession.removeItem(STAFF_PROFILE_STORAGE_KEY);
+        safeSession.removeItem('rbh_staff_role');
+      }
     }
-    safeDispatchEvent(new CustomEvent('rbh_staff_auth_changed', { detail: { profile } }));
+    safeDispatchEvent(new CustomEvent('rbh_staff_auth_changed', { detail: { profile, restaurantId: cleanRid } }));
   } catch (e) {
     console.error('Failed to save staff profile', e);
   }
@@ -812,82 +984,103 @@ export async function fetchMenuItems(restaurantId?: string): Promise<{ items: Me
 
   if (supabase) {
     try {
-      // Pre-warm taxonomy so category names and subcategories resolve correctly
-      try {
-        await Promise.all([
-          fetchMenuCategories(currentRid),
-          fetchMenuSubcategories(currentRid)
-        ]);
-      } catch (taxErr) {
-        console.warn('Taxonomy prefetch non-blocking error:', taxErr);
-      }
+      return await jarvis.executeSafe({
+        module: 'MENU',
+        operation: 'fetch_menu_items',
+        restaurantId: currentRid,
+        circuitBreakerKey: `menu_items:${currentRid}`,
+        maxRetries: 2,
+        action: async () => {
+          // Pre-warm taxonomy so category names and subcategories resolve correctly
+          try {
+            await Promise.all([
+              fetchMenuCategories(currentRid),
+              fetchMenuSubcategories(currentRid)
+            ]);
+          } catch (taxErr) {
+            console.warn('Taxonomy prefetch non-blocking error:', taxErr);
+          }
 
-      const targetTable = (config.tableName && config.tableName !== 'Royal biryani house demo') ? config.tableName : 'menu_items';
+          const targetTable = (config.tableName && config.tableName !== 'Royal biryani house demo') ? config.tableName : 'menu_items';
 
-      // 1. Primary query: Query targetTable with tenant isolation
-      let { data, error } = await supabase
-        .from(targetTable)
-        .select('*')
-        .eq('restaurant_id', currentRid);
+          // 1. Primary query: Query targetTable with tenant isolation
+          let { data, error } = await supabase
+            .from(targetTable)
+            .select('*')
+            .eq('restaurant_id', currentRid);
 
-      // 2. If no data found or error, and targetTable wasn't 'menu_items', try 'menu_items'
-      if ((error || !data || data.length === 0) && targetTable !== 'menu_items') {
-        const retry = await supabase.from('menu_items').select('*').eq('restaurant_id', currentRid);
-        if (!retry.error && retry.data && retry.data.length > 0) {
-          data = retry.data;
-          error = null;
-        }
-      }
-
-      if (data && data.length > 0) {
-        const mapped = data.map(mapSupabaseRowToMenuItem);
-        
-        // Merge with any custom items added in local storage
-        let combined = [...mapped];
-        try {
-          const rawLocal = safeStorage.getItem(getTenantStorageKey(LOCAL_MENU_KEY, currentRid)) || safeStorage.getItem(LOCAL_MENU_KEY);
-          if (rawLocal) {
-            const localParsed: MenuItem[] = JSON.parse(rawLocal);
-            if (Array.isArray(localParsed)) {
-              localParsed.forEach(localItem => {
-                if (localItem && localItem.id && !combined.some(c => String(c.id) === String(localItem.id))) {
-                  combined.push(localItem);
-                }
-              });
+          // 2. If no data found or error, and targetTable wasn't 'menu_items', try 'menu_items'
+          if ((error || !data || data.length === 0) && targetTable !== 'menu_items') {
+            const retry = await supabase.from('menu_items').select('*').eq('restaurant_id', currentRid);
+            if (!retry.error && retry.data && retry.data.length > 0) {
+              data = retry.data;
+              error = null;
             }
           }
-        } catch (e) {
-          // Ignore parse errors
-        }
 
-        combined.forEach(item => {
-          if (availMap[String(item.id)] !== undefined) {
-            item.Available = availMap[String(item.id)];
-          } else {
-            availMap[String(item.id)] = item.Available;
+          if (error) {
+            throw error;
           }
-        });
-        saveMenuAvailabilityMap(availMap, currentRid);
-        // Cache to local storage
-        safeStorage.setItem(getTenantStorageKey(LOCAL_MENU_KEY, currentRid), JSON.stringify(combined));
-        safeStorage.setItem(LOCAL_MENU_KEY, JSON.stringify(combined));
-        return { items: combined, source: 'supabase' };
-      } else {
-        return getLocalMenuItems(`No menu items found in Supabase for restaurant tenant "${currentRid}".`);
-      }
+
+          if (data && data.length > 0) {
+            const mapped = data.map(mapSupabaseRowToMenuItem);
+            
+            // Merge with any custom items added in local storage
+            let combined = [...mapped];
+            try {
+              const rawLocal = safeStorage.getItem(getTenantStorageKey(LOCAL_MENU_KEY, currentRid)) 
+                || (currentRid === DEFAULT_RESTAURANT_ID ? safeStorage.getItem(LOCAL_MENU_KEY) : null);
+              if (rawLocal) {
+                const localParsed: MenuItem[] = JSON.parse(rawLocal);
+                if (Array.isArray(localParsed)) {
+                  localParsed.forEach(localItem => {
+                    if (localItem && localItem.id && !combined.some(c => String(c.id) === String(localItem.id))) {
+                      combined.push(localItem);
+                    }
+                  });
+                }
+              }
+            } catch (e) {
+              // Ignore parse errors
+            }
+
+            combined.forEach(item => {
+              if (availMap[String(item.id)] !== undefined) {
+                item.Available = availMap[String(item.id)];
+              } else {
+                availMap[String(item.id)] = item.Available;
+              }
+            });
+            saveMenuAvailabilityMap(availMap, currentRid);
+            // Cache to local storage
+            safeStorage.setItem(getTenantStorageKey(LOCAL_MENU_KEY, currentRid), JSON.stringify(combined));
+            if (currentRid === DEFAULT_RESTAURANT_ID) {
+              safeStorage.setItem(LOCAL_MENU_KEY, JSON.stringify(combined));
+            }
+            return { items: combined, source: 'supabase' as const };
+          } else {
+            return getLocalMenuItems(`No menu items found in Supabase for restaurant tenant "${currentRid}".`, currentRid);
+          }
+        },
+        fallback: async (err) => {
+          return getLocalMenuItems(err?.message || 'Supabase menu fetch failed', currentRid);
+        }
+      });
     } catch (err: any) {
       console.warn('Supabase fetch failed:', err);
-      return getLocalMenuItems(err.message);
+      return getLocalMenuItems(err.message, currentRid);
     }
   }
 
-  return getLocalMenuItems();
+  return getLocalMenuItems(undefined, currentRid);
 }
 
-function getLocalMenuItems(errMessage?: string): { items: MenuItem[]; source: 'local'; error?: string } {
-  const availMap = getMenuAvailabilityMap();
+export function getLocalMenuItems(errMessage?: string, restaurantId: string = getCurrentRestaurantId()): { items: MenuItem[]; source: 'local'; error?: string } {
+  const currentRid = (restaurantId || getCurrentRestaurantId() || DEFAULT_RESTAURANT_ID).trim().toLowerCase();
+  const availMap = getMenuAvailabilityMap(currentRid);
   try {
-    const cached = safeStorage.getItem(LOCAL_MENU_KEY);
+    const tenantKey = getTenantStorageKey(LOCAL_MENU_KEY, currentRid);
+    const cached = safeStorage.getItem(tenantKey) || (currentRid === DEFAULT_RESTAURANT_ID ? safeStorage.getItem(LOCAL_MENU_KEY) : null);
     if (cached) {
       const parsed = JSON.parse(cached);
       if (Array.isArray(parsed) && parsed.length > 0) {
@@ -910,35 +1103,40 @@ function getLocalMenuItems(errMessage?: string): { items: MenuItem[]; source: 'l
     // Ignore error
   }
 
-  // Merge default menu with individual availability map
-  const defaultMerged: MenuItem[] = DEFAULT_MENU_ITEMS.map(item => {
-    const idStr = String(item.id);
-    const isAvail = availMap[idStr] !== undefined ? availMap[idStr] : item.Available;
-    return {
-      ...item,
-      Available: isAvail,
-      stockStatus: (isAvail ? 'In Stock' : 'Out of Stock') as 'In Stock' | 'Out of Stock'
-    };
-  });
+  // Merge default menu with individual availability map ONLY for default restaurant (Royal Biryani House)
+  if (currentRid === DEFAULT_RESTAURANT_ID) {
+    const defaultMerged: MenuItem[] = DEFAULT_MENU_ITEMS.map(item => {
+      const idStr = String(item.id);
+      const isAvail = availMap[idStr] !== undefined ? availMap[idStr] : item.Available;
+      return {
+        ...item,
+        Available: isAvail,
+        stockStatus: (isAvail ? 'In Stock' : 'Out of Stock') as 'In Stock' | 'Out of Stock'
+      };
+    });
+    return { items: defaultMerged, source: 'local', error: errMessage };
+  }
 
-  return { items: defaultMerged, source: 'local', error: errMessage };
+  return { items: [], source: 'local', error: errMessage };
 }
 
 // Update single menu item availability independently
-export async function updateMenuItemAvailability(id: string | number, available: boolean): Promise<boolean> {
+export async function updateMenuItemAvailability(id: string | number, available: boolean, restaurantId: string = getCurrentRestaurantId()): Promise<boolean> {
   const config = getSupabaseConfig();
   const supabase = getSupabaseClient();
   const idStr = String(id);
+  const currentRid = (restaurantId || getCurrentRestaurantId() || DEFAULT_RESTAURANT_ID).trim().toLowerCase();
 
   // 1. Update independent availability map
-  const availMap = getMenuAvailabilityMap();
+  const availMap = getMenuAvailabilityMap(currentRid);
   availMap[idStr] = available;
-  saveMenuAvailabilityMap(availMap);
+  saveMenuAvailabilityMap(availMap, currentRid);
 
-  // 2. Update in local cached menu items array (ONLY for this specific item)
+  // 2. Update in local cached menu items array (ONLY for this specific item in current tenant)
   try {
-    const current = safeStorage.getItem(LOCAL_MENU_KEY);
-    let items: MenuItem[] = current ? JSON.parse(current) : [...DEFAULT_MENU_ITEMS];
+    const tenantKey = getTenantStorageKey(LOCAL_MENU_KEY, currentRid);
+    const current = safeStorage.getItem(tenantKey) || (currentRid === DEFAULT_RESTAURANT_ID ? safeStorage.getItem(LOCAL_MENU_KEY) : null);
+    let items: MenuItem[] = current ? JSON.parse(current) : (currentRid === DEFAULT_RESTAURANT_ID ? [...DEFAULT_MENU_ITEMS] : []);
     items = items.map(item => {
       if (String(item.id) === idStr) {
         return {
@@ -951,32 +1149,37 @@ export async function updateMenuItemAvailability(id: string | number, available:
       // Guarantee all other items are untouched
       return item;
     });
-    safeStorage.setItem(LOCAL_MENU_KEY, JSON.stringify(items));
+    safeStorage.setItem(tenantKey, JSON.stringify(items));
+    if (currentRid === DEFAULT_RESTAURANT_ID) {
+      safeStorage.setItem(LOCAL_MENU_KEY, JSON.stringify(items));
+    }
   } catch (e) {
     console.error('Local update failed', e);
   }
 
   // 3. Broadcast and dispatch events
-  if (ordersBroadcastChannel) {
+  const broadcastCh = getOrdersBroadcastChannel(currentRid);
+  if (broadcastCh) {
     try {
-      ordersBroadcastChannel.postMessage({
+      broadcastCh.postMessage({
         type: 'MENU_AVAILABILITY_CHANGED',
         itemId: idStr,
-        available
+        available,
+        restaurantId: currentRid
       });
     } catch (e) {
       // Ignore broadcast error
     }
   }
-  safeDispatchEvent(new CustomEvent('rbh_menu_availability_changed', { detail: { itemId: idStr, available } }));
+  safeDispatchEvent(new CustomEvent('rbh_menu_availability_changed', { detail: { itemId: idStr, available, restaurantId: currentRid } }));
   safeDispatchEvent(new Event('rbh_menu_updated'));
 
-  // 4. Update in Supabase for this specific item ID only
+  // 4. Update in Supabase for this specific item ID and restaurant_id only
   if (supabase && config.tableName) {
     try {
       const numericId = !isNaN(Number(id)) ? Number(id) : null;
 
-      // Try updating with exact column names (Available, available, is_available)
+      // Try updating with exact column names (Available, available, is_available) scoped to restaurant_id
       let updateRes = await supabase
         .from(config.tableName)
         .update({
@@ -985,7 +1188,8 @@ export async function updateMenuItemAvailability(id: string | number, available:
           is_available: available,
           stock_status: available ? 'In Stock' : 'Out of Stock'
         })
-        .eq('id', id);
+        .eq('id', id)
+        .eq('restaurant_id', currentRid);
 
       if (updateRes.error && numericId !== null) {
         // Retry with numeric ID if string failed
@@ -997,7 +1201,8 @@ export async function updateMenuItemAvailability(id: string | number, available:
             is_available: available,
             stock_status: available ? 'In Stock' : 'Out of Stock'
           })
-          .eq('id', numericId);
+          .eq('id', numericId)
+          .eq('restaurant_id', currentRid);
       }
     } catch (err) {
       console.warn('Supabase update failed:', err);
@@ -1051,7 +1256,9 @@ export async function seedDefaultMenuToSupabase(): Promise<{ success: boolean; m
 
 export function getStoredRestaurantSettings(restaurantId: string = getCurrentRestaurantId()): RestaurantSettings {
   try {
-    const raw = safeStorage.getItem(`${RESTAURANT_SETTINGS_STORAGE_KEY}_${restaurantId}`) || safeStorage.getItem(RESTAURANT_SETTINGS_STORAGE_KEY);
+    const raw = safeStorage.getItem(getTenantStorageKey(RESTAURANT_SETTINGS_STORAGE_KEY, restaurantId))
+      || safeStorage.getItem(`${RESTAURANT_SETTINGS_STORAGE_KEY}_${restaurantId}`)
+      || (restaurantId === DEFAULT_RESTAURANT_ID ? safeStorage.getItem(RESTAURANT_SETTINGS_STORAGE_KEY) : null);
     if (raw) {
       const parsed = JSON.parse(raw);
       return { ...DEFAULT_RESTAURANT_SETTINGS, ...parsed, id: restaurantId, restaurant_id: restaurantId };
@@ -1108,7 +1315,10 @@ export async function fetchRestaurantSettings(restaurantId: string = getCurrentR
           created_at: raw.created_at,
           updated_at: raw.updated_at
         };
-        safeStorage.setItem(`${RESTAURANT_SETTINGS_STORAGE_KEY}_${restaurantId}`, JSON.stringify(settings));
+        safeStorage.setItem(getTenantStorageKey(RESTAURANT_SETTINGS_STORAGE_KEY, restaurantId), JSON.stringify(settings));
+        if (restaurantId === DEFAULT_RESTAURANT_ID) {
+          safeStorage.setItem(RESTAURANT_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+        }
         return settings;
       }
 
@@ -1154,7 +1364,10 @@ export async function fetchRestaurantSettings(restaurantId: string = getCurrentR
           created_at: data.created_at,
           updated_at: data.updated_at
         };
-        safeStorage.setItem(`${RESTAURANT_SETTINGS_STORAGE_KEY}_${restaurantId}`, JSON.stringify(settings));
+        safeStorage.setItem(getTenantStorageKey(RESTAURANT_SETTINGS_STORAGE_KEY, restaurantId), JSON.stringify(settings));
+        if (restaurantId === DEFAULT_RESTAURANT_ID) {
+          safeStorage.setItem(RESTAURANT_SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+        }
         return settings;
       }
     } catch (e) {
@@ -1212,16 +1425,19 @@ export async function saveRestaurantSettings(settings: RestaurantSettings): Prom
   }
 
   try {
-    safeStorage.setItem(`${RESTAURANT_SETTINGS_STORAGE_KEY}_${restaurantId}`, JSON.stringify(payload));
-    safeStorage.setItem(RESTAURANT_SETTINGS_STORAGE_KEY, JSON.stringify(payload));
+    safeStorage.setItem(getTenantStorageKey(RESTAURANT_SETTINGS_STORAGE_KEY, restaurantId), JSON.stringify(payload));
+    if (restaurantId === DEFAULT_RESTAURANT_ID) {
+      safeStorage.setItem(RESTAURANT_SETTINGS_STORAGE_KEY, JSON.stringify(payload));
+    }
   } catch (e) {
     console.error('Failed to save settings to localStorage', e);
   }
 
   // Broadcast & event dispatch
-  if (ordersBroadcastChannel) {
+  const broadcastCh = getOrdersBroadcastChannel(restaurantId);
+  if (broadcastCh) {
     try {
-      ordersBroadcastChannel.postMessage({ type: 'RESTAURANT_SETTINGS_CHANGED', restaurantId, settings: payload });
+      broadcastCh.postMessage({ type: 'RESTAURANT_SETTINGS_CHANGED', restaurantId, settings: payload });
     } catch {}
   }
   safeDispatchEvent(new CustomEvent('rbh_restaurant_settings_changed', { detail: payload }));
@@ -1235,7 +1451,9 @@ export async function saveRestaurantSettings(settings: RestaurantSettings): Prom
 
 export function getStoredRestaurantTables(restaurantId: string = getCurrentRestaurantId()): RestaurantTable[] {
   try {
-    const raw = safeStorage.getItem(`${RESTAURANT_TABLES_STORAGE_KEY}_${restaurantId}`) || safeStorage.getItem(RESTAURANT_TABLES_STORAGE_KEY);
+    const raw = safeStorage.getItem(getTenantStorageKey(RESTAURANT_TABLES_STORAGE_KEY, restaurantId))
+      || safeStorage.getItem(`${RESTAURANT_TABLES_STORAGE_KEY}_${restaurantId}`)
+      || (restaurantId === DEFAULT_RESTAURANT_ID ? safeStorage.getItem(RESTAURANT_TABLES_STORAGE_KEY) : null);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
@@ -1245,13 +1463,18 @@ export function getStoredRestaurantTables(restaurantId: string = getCurrentResta
   } catch (e) {
     console.error('Failed to get stored restaurant tables', e);
   }
-  return DEFAULT_RESTAURANT_TABLES.map(t => ({ ...t, restaurant_id: restaurantId }));
+  if (restaurantId === DEFAULT_RESTAURANT_ID) {
+    return DEFAULT_RESTAURANT_TABLES.map(t => ({ ...t, restaurant_id: restaurantId }));
+  }
+  return [];
 }
 
 export function saveStoredRestaurantTables(tables: RestaurantTable[], restaurantId: string = getCurrentRestaurantId()): void {
   try {
-    safeStorage.setItem(`${RESTAURANT_TABLES_STORAGE_KEY}_${restaurantId}`, JSON.stringify(tables));
-    safeStorage.setItem(RESTAURANT_TABLES_STORAGE_KEY, JSON.stringify(tables));
+    safeStorage.setItem(getTenantStorageKey(RESTAURANT_TABLES_STORAGE_KEY, restaurantId), JSON.stringify(tables));
+    if (restaurantId === DEFAULT_RESTAURANT_ID) {
+      safeStorage.setItem(RESTAURANT_TABLES_STORAGE_KEY, JSON.stringify(tables));
+    }
   } catch (e) {
     console.error('Failed to save stored restaurant tables', e);
   }
@@ -1336,7 +1559,8 @@ export async function saveRestaurantTable(table: Partial<RestaurantTable>): Prom
     } as RestaurantTable;
     targetTables = tables.map(t => t.id === table.id ? target : t);
   } else {
-    const newId = table.id || `tbl-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
+    const cleanRid = (table.restaurant_id || restaurantId || DEFAULT_RESTAURANT_ID).replace(/[^a-z0-9_-]/gi, '');
+    const newId = table.id || `tbl_${cleanRid}_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
     target = {
       id: newId,
       restaurant_id: restaurantId,
@@ -1382,9 +1606,10 @@ export async function saveRestaurantTable(table: Partial<RestaurantTable>): Prom
   saveStoredRestaurantTables(targetTables, restaurantId);
 
   // Broadcast & events
-  if (ordersBroadcastChannel) {
+  const broadcastCh = getOrdersBroadcastChannel(restaurantId);
+  if (broadcastCh) {
     try {
-      ordersBroadcastChannel.postMessage({ type: 'RESTAURANT_TABLES_CHANGED', restaurantId, table: target });
+      broadcastCh.postMessage({ type: 'RESTAURANT_TABLES_CHANGED', restaurantId, table: target });
     } catch {}
   }
   safeDispatchEvent(new CustomEvent('rbh_restaurant_tables_changed', { detail: target }));
@@ -1398,9 +1623,10 @@ export async function deleteRestaurantTable(tableId: string): Promise<boolean> {
   const filtered = tables.filter(t => t.id !== tableId);
   saveStoredRestaurantTables(filtered, restaurantId);
 
-  if (ordersBroadcastChannel) {
+  const broadcastCh = getOrdersBroadcastChannel(restaurantId);
+  if (broadcastCh) {
     try {
-      ordersBroadcastChannel.postMessage({ type: 'RESTAURANT_TABLES_CHANGED', restaurantId, deletedId: tableId });
+      broadcastCh.postMessage({ type: 'RESTAURANT_TABLES_CHANGED', restaurantId, deletedId: tableId });
     } catch {}
   }
   safeDispatchEvent(new CustomEvent('rbh_restaurant_tables_changed', { detail: { deletedId: tableId } }));
@@ -1423,7 +1649,9 @@ export async function deleteRestaurantTable(tableId: string): Promise<boolean> {
 
 export function getStoredMenuCategories(restaurantId: string = getCurrentRestaurantId()): MenuCategory[] {
   try {
-    const raw = safeStorage.getItem(`${MENU_CATEGORIES_STORAGE_KEY}_${restaurantId}`) || safeStorage.getItem(MENU_CATEGORIES_STORAGE_KEY);
+    const raw = safeStorage.getItem(getTenantStorageKey(MENU_CATEGORIES_STORAGE_KEY, restaurantId))
+      || safeStorage.getItem(`${MENU_CATEGORIES_STORAGE_KEY}_${restaurantId}`)
+      || (restaurantId === DEFAULT_RESTAURANT_ID ? safeStorage.getItem(MENU_CATEGORIES_STORAGE_KEY) : null);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
@@ -1433,13 +1661,18 @@ export function getStoredMenuCategories(restaurantId: string = getCurrentRestaur
   } catch (e) {
     console.error('Failed to get stored menu categories', e);
   }
-  return DEFAULT_MENU_CATEGORIES.map(c => ({ ...c, restaurant_id: restaurantId }));
+  if (restaurantId === DEFAULT_RESTAURANT_ID) {
+    return DEFAULT_MENU_CATEGORIES.map(c => ({ ...c, restaurant_id: restaurantId }));
+  }
+  return [];
 }
 
 export function saveStoredMenuCategories(categories: MenuCategory[], restaurantId: string = getCurrentRestaurantId()): void {
   try {
-    safeStorage.setItem(`${MENU_CATEGORIES_STORAGE_KEY}_${restaurantId}`, JSON.stringify(categories));
-    safeStorage.setItem(MENU_CATEGORIES_STORAGE_KEY, JSON.stringify(categories));
+    safeStorage.setItem(getTenantStorageKey(MENU_CATEGORIES_STORAGE_KEY, restaurantId), JSON.stringify(categories));
+    if (restaurantId === DEFAULT_RESTAURANT_ID) {
+      safeStorage.setItem(MENU_CATEGORIES_STORAGE_KEY, JSON.stringify(categories));
+    }
   } catch (e) {}
 }
 
@@ -1493,7 +1726,8 @@ export async function saveMenuCategory(category: Partial<MenuCategory>): Promise
     const updated = categories.map(c => c.id === category.id ? target : c);
     saveStoredMenuCategories(updated, restaurantId);
   } else {
-    const newId = category.id || `cat-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
+    const cleanRid = (category.restaurant_id || restaurantId).replace(/[^a-z0-9_-]/gi, '');
+    const newId = category.id || `cat_${cleanRid}_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
     target = {
       id: newId,
       restaurant_id: restaurantId,
@@ -1554,7 +1788,9 @@ export async function deleteMenuCategory(categoryId: string): Promise<boolean> {
 
 export function getStoredMenuSubcategories(restaurantId: string = getCurrentRestaurantId()): MenuSubcategory[] {
   try {
-    const raw = safeStorage.getItem(`${MENU_SUBCATEGORIES_STORAGE_KEY}_${restaurantId}`) || safeStorage.getItem(MENU_SUBCATEGORIES_STORAGE_KEY);
+    const raw = safeStorage.getItem(getTenantStorageKey(MENU_SUBCATEGORIES_STORAGE_KEY, restaurantId))
+      || safeStorage.getItem(`${MENU_SUBCATEGORIES_STORAGE_KEY}_${restaurantId}`)
+      || (restaurantId === DEFAULT_RESTAURANT_ID ? safeStorage.getItem(MENU_SUBCATEGORIES_STORAGE_KEY) : null);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed) && parsed.length > 0) {
@@ -1564,13 +1800,18 @@ export function getStoredMenuSubcategories(restaurantId: string = getCurrentRest
   } catch (e) {
     console.error('Failed to get stored menu subcategories', e);
   }
-  return DEFAULT_MENU_SUBCATEGORIES.map(s => ({ ...s, restaurant_id: restaurantId }));
+  if (restaurantId === DEFAULT_RESTAURANT_ID) {
+    return DEFAULT_MENU_SUBCATEGORIES.map(s => ({ ...s, restaurant_id: restaurantId }));
+  }
+  return [];
 }
 
 export function saveStoredMenuSubcategories(subcategories: MenuSubcategory[], restaurantId: string = getCurrentRestaurantId()): void {
   try {
-    safeStorage.setItem(`${MENU_SUBCATEGORIES_STORAGE_KEY}_${restaurantId}`, JSON.stringify(subcategories));
-    safeStorage.setItem(MENU_SUBCATEGORIES_STORAGE_KEY, JSON.stringify(subcategories));
+    safeStorage.setItem(getTenantStorageKey(MENU_SUBCATEGORIES_STORAGE_KEY, restaurantId), JSON.stringify(subcategories));
+    if (restaurantId === DEFAULT_RESTAURANT_ID) {
+      safeStorage.setItem(MENU_SUBCATEGORIES_STORAGE_KEY, JSON.stringify(subcategories));
+    }
   } catch (e) {}
 }
 
@@ -1624,7 +1865,8 @@ export async function saveMenuSubcategory(subcategory: Partial<MenuSubcategory>)
     const updated = subcategories.map(s => s.id === subcategory.id ? target : s);
     saveStoredMenuSubcategories(updated, restaurantId);
   } else {
-    const newId = subcategory.id || `sub-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`;
+    const cleanRid = (subcategory.restaurant_id || restaurantId).replace(/[^a-z0-9_-]/gi, '');
+    const newId = subcategory.id || `sub_${cleanRid}_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
     target = {
       id: newId,
       restaurant_id: restaurantId,
@@ -1691,7 +1933,8 @@ export async function saveMenuItemToSupabase(item: Partial<MenuItem> & { Name: s
   const restaurantId = item.restaurant_id || getCurrentRestaurantId();
   const config = getSupabaseConfig();
   const supabase = getSupabaseClient();
-  const idStr = String(item.id || `dish-${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 6)}`);
+  const cleanRid = (restaurantId || getCurrentRestaurantId() || DEFAULT_RESTAURANT_ID).replace(/[^a-z0-9_-]/gi, '');
+  const idStr = String(item.id || `item_${cleanRid}_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`);
 
   const fullItem: MenuItem = {
     id: idStr,
@@ -1729,7 +1972,10 @@ export async function saveMenuItemToSupabase(item: Partial<MenuItem> & { Name: s
 
   // Update local cache & tenant cache
   try {
-    const keys = [LOCAL_MENU_KEY, getTenantStorageKey(LOCAL_MENU_KEY, restaurantId)];
+    const keys = [getTenantStorageKey(LOCAL_MENU_KEY, restaurantId)];
+    if (restaurantId === DEFAULT_RESTAURANT_ID) {
+      keys.push(LOCAL_MENU_KEY);
+    }
     keys.forEach(k => {
       const raw = safeStorage.getItem(k);
       let items: MenuItem[] = raw ? JSON.parse(raw) : [];
@@ -1746,14 +1992,15 @@ export async function saveMenuItemToSupabase(item: Partial<MenuItem> & { Name: s
   }
 
   // Update availability map
-  const availMap = getMenuAvailabilityMap();
+  const availMap = getMenuAvailabilityMap(restaurantId);
   availMap[idStr] = fullItem.Available;
-  saveMenuAvailabilityMap(availMap);
+  saveMenuAvailabilityMap(availMap, restaurantId);
 
   // Dispatch events
-  if (ordersBroadcastChannel) {
+  const broadcastCh = getOrdersBroadcastChannel(restaurantId);
+  if (broadcastCh) {
     try {
-      ordersBroadcastChannel.postMessage({ type: 'MENU_ITEM_SAVED', item: fullItem });
+      broadcastCh.postMessage({ type: 'MENU_ITEM_SAVED', item: fullItem, restaurantId });
     } catch {}
   }
   safeDispatchEvent(new CustomEvent('rbh_menu_item_saved', { detail: fullItem }));
@@ -1798,7 +2045,10 @@ export async function deleteMenuItemFromSupabase(itemId: string | number): Promi
 
   // Remove from local cache & tenant cache
   try {
-    const keys = [LOCAL_MENU_KEY, getTenantStorageKey(LOCAL_MENU_KEY, currentRid)];
+    const keys = [getTenantStorageKey(LOCAL_MENU_KEY, currentRid)];
+    if (currentRid === DEFAULT_RESTAURANT_ID) {
+      keys.push(LOCAL_MENU_KEY);
+    }
     keys.forEach(k => {
       const raw = safeStorage.getItem(k);
       if (raw) {
@@ -1809,19 +2059,22 @@ export async function deleteMenuItemFromSupabase(itemId: string | number): Promi
     });
   } catch (e) {}
 
-  if (ordersBroadcastChannel) {
+  const broadcastCh = getOrdersBroadcastChannel(currentRid);
+  if (broadcastCh) {
     try {
-      ordersBroadcastChannel.postMessage({ type: 'MENU_ITEM_DELETED', itemId: idStr });
+      broadcastCh.postMessage({ type: 'MENU_ITEM_DELETED', itemId: idStr, restaurantId: currentRid });
     } catch {}
   }
-  safeDispatchEvent(new CustomEvent('rbh_menu_item_deleted', { detail: { itemId: idStr } }));
+  safeDispatchEvent(new CustomEvent('rbh_menu_item_deleted', { detail: { itemId: idStr, restaurantId: currentRid } }));
   safeDispatchEvent(new Event('rbh_menu_updated'));
 
   if (supabase) {
     try {
       const targetTable = config.tableName || 'menu_items';
-      await supabase.from(targetTable).delete().eq('id', idStr);
-      await supabase.from('menu_items').delete().eq('id', idStr);
+      await supabase.from(targetTable).delete().eq('id', idStr).eq('restaurant_id', currentRid);
+      if (targetTable !== 'menu_items') {
+        await supabase.from('menu_items').delete().eq('id', idStr).eq('restaurant_id', currentRid);
+      }
     } catch (e) {
       console.warn('Supabase deleteMenuItem failed', e);
     }
@@ -2091,8 +2344,10 @@ export async function bulkImportMenuItems(input: Partial<MenuItem>[] | string): 
   }
 
   const restaurantId = getCurrentRestaurantId();
-  const rawMenu = safeStorage.getItem(LOCAL_MENU_KEY);
-  let currentMenu: MenuItem[] = rawMenu ? JSON.parse(rawMenu) : [...DEFAULT_MENU_ITEMS];
+  const cleanRid = (restaurantId || DEFAULT_RESTAURANT_ID).replace(/[^a-z0-9_-]/gi, '');
+  const rawMenu = safeStorage.getItem(getTenantStorageKey(LOCAL_MENU_KEY, restaurantId))
+    || (restaurantId === DEFAULT_RESTAURANT_ID ? safeStorage.getItem(LOCAL_MENU_KEY) : null);
+  let currentMenu: MenuItem[] = rawMenu ? JSON.parse(rawMenu) : (restaurantId === DEFAULT_RESTAURANT_ID ? [...DEFAULT_MENU_ITEMS] : []);
 
   const categorySet = new Set<string>();
 
@@ -2101,7 +2356,7 @@ export async function bulkImportMenuItems(input: Partial<MenuItem>[] | string): 
     categorySet.add(catName);
 
     return {
-      id: it.id || `item-bulk-${Date.now()}-${idx}`,
+      id: it.id || `item_${cleanRid}_bulk_${Date.now().toString(36)}_${idx}`,
       restaurant_id: restaurantId,
       Name: it.Name || 'New Dish',
       Price: it.Price || 200,
@@ -2147,23 +2402,27 @@ export async function bulkImportMenuItems(input: Partial<MenuItem>[] | string): 
   // Append to local menu
   currentMenu = [...currentMenu, ...prepared];
   try {
-    safeStorage.setItem(LOCAL_MENU_KEY, JSON.stringify(currentMenu));
+    safeStorage.setItem(getTenantStorageKey(LOCAL_MENU_KEY, restaurantId), JSON.stringify(currentMenu));
+    if (restaurantId === DEFAULT_RESTAURANT_ID) {
+      safeStorage.setItem(LOCAL_MENU_KEY, JSON.stringify(currentMenu));
+    }
   } catch (e) {}
 
   // Update availability map
-  const availMap = getMenuAvailabilityMap();
+  const availMap = getMenuAvailabilityMap(restaurantId);
   prepared.forEach(item => {
     availMap[String(item.id)] = item.Available;
   });
-  saveMenuAvailabilityMap(availMap);
+  saveMenuAvailabilityMap(availMap, restaurantId);
 
   // Dispatch events
-  if (ordersBroadcastChannel) {
+  const broadcastCh = getOrdersBroadcastChannel(restaurantId);
+  if (broadcastCh) {
     try {
-      ordersBroadcastChannel.postMessage({ type: 'BULK_MENU_IMPORTED', count: prepared.length });
+      broadcastCh.postMessage({ type: 'BULK_MENU_IMPORTED', count: prepared.length, restaurantId });
     } catch {}
   }
-  safeDispatchEvent(new CustomEvent('rbh_menu_bulk_imported', { detail: { count: prepared.length } }));
+  safeDispatchEvent(new CustomEvent('rbh_menu_bulk_imported', { detail: { count: prepared.length, restaurantId } }));
   safeDispatchEvent(new Event('rbh_menu_updated'));
 
   // Save each to Supabase in background
@@ -2284,23 +2543,39 @@ Accompaniments,Sides & Salads,Mirchi Ka Salan,Traditional Hyderabadi peanut sesa
 // Orders management (local + synchronized with Supabase if table exists)
 const CUSTOMER_ACTIVE_ORDER_KEY = 'rbh_customer_active_order_id';
 
-// BroadcastChannel for instant cross-tab realtime sync even without network latency
-let ordersBroadcastChannel: BroadcastChannel | null = null;
-try {
-  if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
-    ordersBroadcastChannel = new BroadcastChannel('rbh_orders_realtime');
+// BroadcastChannel for instant cross-tab realtime sync even without network latency (Tenant-Scoped)
+const broadcastChannels = new Map<string, BroadcastChannel>();
+export function getOrdersBroadcastChannel(restaurantId: string = getCurrentRestaurantId()): BroadcastChannel | null {
+  const cleanRid = (restaurantId || getCurrentRestaurantId() || DEFAULT_RESTAURANT_ID).trim().toLowerCase();
+  try {
+    const BC = (typeof window !== 'undefined' && (window as any).BroadcastChannel) || (typeof BroadcastChannel !== 'undefined' ? BroadcastChannel : null);
+    if (BC) {
+      if (!broadcastChannels.has(cleanRid)) {
+        const ch = new BC(`rbh_orders_realtime_${cleanRid}`);
+        broadcastChannels.set(cleanRid, ch);
+      }
+      return broadcastChannels.get(cleanRid) || null;
+    }
+  } catch (e) {
+    // Ignore if BroadcastChannel not supported
   }
-} catch (e) {
-  // Ignore if BroadcastChannel not supported
+  return null;
 }
 
-export function getCustomerActiveOrderId(tableNumber?: string): string | null {
+let ordersBroadcastChannel: BroadcastChannel | null = getOrdersBroadcastChannel();
+
+export function getCustomerActiveOrderId(tableNumber?: string, restaurantId: string = getCurrentRestaurantId()): string | null {
   try {
-    const saved = safeStorage.getItem(CUSTOMER_ACTIVE_ORDER_KEY);
+    const cleanRid = (restaurantId || getCurrentRestaurantId() || DEFAULT_RESTAURANT_ID).trim().toLowerCase();
+    const tenantKey = getTenantStorageKey(CUSTOMER_ACTIVE_ORDER_KEY, cleanRid);
+    let saved = safeStorage.getItem(tenantKey);
+    if (!saved && cleanRid === DEFAULT_RESTAURANT_ID) {
+      saved = safeStorage.getItem(CUSTOMER_ACTIVE_ORDER_KEY);
+    }
     if (saved) {
       // If tableNumber is provided, check if the saved active order matches this table
       if (tableNumber) {
-        const orders = getStoredOrders();
+        const orders = getStoredOrders(cleanRid);
         const activeOrder = orders.find(o => o.id === saved);
         if (activeOrder && activeOrder.tableNumber.toLowerCase() === tableNumber.toLowerCase()) {
           return saved;
@@ -2315,14 +2590,22 @@ export function getCustomerActiveOrderId(tableNumber?: string): string | null {
   return null;
 }
 
-export function setCustomerActiveOrderId(orderId: string | null): void {
+export function setCustomerActiveOrderId(orderId: string | null, restaurantId: string = getCurrentRestaurantId()): void {
   try {
+    const cleanRid = (restaurantId || getCurrentRestaurantId() || DEFAULT_RESTAURANT_ID).trim().toLowerCase();
+    const tenantKey = getTenantStorageKey(CUSTOMER_ACTIVE_ORDER_KEY, cleanRid);
     if (orderId) {
-      safeStorage.setItem(CUSTOMER_ACTIVE_ORDER_KEY, orderId);
+      safeStorage.setItem(tenantKey, orderId);
+      if (cleanRid === DEFAULT_RESTAURANT_ID) {
+        safeStorage.setItem(CUSTOMER_ACTIVE_ORDER_KEY, orderId);
+      }
     } else {
-      safeStorage.removeItem(CUSTOMER_ACTIVE_ORDER_KEY);
+      safeStorage.removeItem(tenantKey);
+      if (cleanRid === DEFAULT_RESTAURANT_ID) {
+        safeStorage.removeItem(CUSTOMER_ACTIVE_ORDER_KEY);
+      }
     }
-    safeDispatchEvent(new CustomEvent('rbh_customer_order_changed', { detail: { orderId } }));
+    safeDispatchEvent(new CustomEvent('rbh_customer_order_changed', { detail: { orderId, restaurantId: cleanRid } }));
   } catch (e) {
     console.error('Failed to save customer active order ID', e);
   }
@@ -2467,87 +2750,101 @@ export async function fetchStoredOrdersFromSupabase(
   const supabase = getSupabaseClient();
   if (supabase) {
     try {
-      let { data, error } = await supabase
-        .from('royal_orders')
-        .select('*')
-        .eq('restaurant_id', restaurantId)
-        .order('created_at', { ascending: false });
+      return await jarvis.executeSafe({
+        module: 'ORDER',
+        operation: 'fetch_stored_orders',
+        restaurantId,
+        circuitBreakerKey: `orders:${restaurantId}`,
+        maxRetries: 2,
+        action: async () => {
+          let { data, error } = await supabase
+            .from('royal_orders')
+            .select('*')
+            .eq('restaurant_id', restaurantId)
+            .order('created_at', { ascending: false });
 
-      if (!error && data) {
-        if (data.length > 0) {
-          const mapped = data.map(mapSupabaseRowToOrder);
-          const currentLocal = getStoredOrders(restaurantId);
+          if (error) throw error;
 
-          // Status priority hierarchy: Completed (4) > Ready (3) > Preparing (2) > New (1)
-          const getStatusRank = (s: string) => {
-            switch (s) {
-              case 'Completed': return 4;
-              case 'Ready': return 3;
-              case 'Preparing': return 2;
-              case 'New': return 1;
-              default: return 0;
-            }
-          };
+          if (data && data.length > 0) {
+            const mapped = data.map(mapSupabaseRowToOrder);
+            const currentLocal = getStoredOrders(restaurantId);
 
-          // Smart reconciliation: keep forward status advancements from local store if remote has not yet caught up
-          const reconciled = mapped.map(remoteOrder => {
-            const localOrder = currentLocal.find(l => l.id === remoteOrder.id);
-            if (!localOrder) return remoteOrder;
-
-            const useLocalStatus = remoteOrder.status !== 'Cancelled' && getStatusRank(localOrder.status) > getStatusRank(remoteOrder.status);
-
-            const resolvedTotal = remoteOrder.total !== undefined ? remoteOrder.total : (localOrder.total || 0);
-
-            // Authoritative remote financial precedence: remote Supabase values take precedence whenever present
-            const resolvedPaidAmount = remoteOrder.paidAmount !== undefined
-              ? remoteOrder.paidAmount
-              : (localOrder.paidAmount !== undefined ? localOrder.paidAmount : 0);
-
-            const resolvedRemaining = remoteOrder.remainingAmount !== undefined
-              ? remoteOrder.remainingAmount
-              : (
-                  localOrder.remainingAmount !== undefined
-                    ? localOrder.remainingAmount
-                    : Math.max(0, resolvedTotal - resolvedPaidAmount)
-                );
-
-            const resolvedPaymentStatus: Order['paymentStatus'] =
-              remoteOrder.paymentStatus !== undefined
-                ? ((resolvedRemaining <= 0.05 && resolvedTotal > 0 && resolvedPaidAmount > 0)
-                    ? 'Paid'
-                    : (remoteOrder.paymentStatus as Order['paymentStatus']))
-                : (localOrder.paymentStatus || 'Pending');
-
-            return {
-              ...remoteOrder,
-              sessionId: remoteOrder.sessionId || localOrder.sessionId,
-              round: remoteOrder.round || localOrder.round || 1,
-              isAddon: remoteOrder.isAddon !== undefined ? remoteOrder.isAddon : localOrder.isAddon,
-              total: resolvedTotal,
-              status: useLocalStatus ? localOrder.status : remoteOrder.status,
-              paymentStatus: resolvedPaymentStatus,
-              paidAmount: resolvedPaidAmount,
-              remainingAmount: resolvedRemaining,
-              paymentHistory: (remoteOrder.paymentHistory && remoteOrder.paymentHistory.length > 0) ? remoteOrder.paymentHistory : (localOrder.paymentHistory || remoteOrder.paymentHistory)
+            // Status priority hierarchy: Completed (4) > Ready (3) > Preparing (2) > New (1)
+            const getStatusRank = (s: string) => {
+              switch (s) {
+                case 'Completed': return 4;
+                case 'Ready': return 3;
+                case 'Preparing': return 2;
+                case 'New': return 1;
+                default: return 0;
+              }
             };
-          });
 
-          // Retain any pending local order not yet retrieved from remote
-          const remoteIds = new Set(reconciled.map(r => r.id));
-          const localOnly = currentLocal.filter(l => !remoteIds.has(l.id));
-          const finalOrders = [...reconciled, ...localOnly];
+            // Smart reconciliation: keep forward status advancements from local store if remote has not yet caught up
+            const reconciled = mapped.map(remoteOrder => {
+              const localOrder = currentLocal.find(l => l.id === remoteOrder.id);
+              if (!localOrder) return remoteOrder;
 
-          saveStoredOrders(finalOrders, restaurantId);
-          return { orders: finalOrders, source: 'supabase' };
-        } else if (restaurantId === DEFAULT_RESTAURANT_ID) {
-          // Table exists but is empty for default restaurant -> seed initial historical orders to Supabase
-          const seeded = INITIAL_HISTORICAL_ORDERS.map(o => ({ ...o, restaurant_id: DEFAULT_RESTAURANT_ID }));
-          saveStoredOrders(seeded, DEFAULT_RESTAURANT_ID);
-          const rowsToInsert = seeded.map(o => mapOrderToSupabasePayload(o));
-          Promise.resolve(supabase.from('royal_orders').insert(rowsToInsert)).catch(() => {});
-          return { orders: seeded, source: 'supabase' };
+              const useLocalStatus = remoteOrder.status !== 'Cancelled' && getStatusRank(localOrder.status) > getStatusRank(remoteOrder.status);
+
+              const resolvedTotal = remoteOrder.total !== undefined ? remoteOrder.total : (localOrder.total || 0);
+
+              // Authoritative remote financial precedence: remote Supabase values take precedence whenever present
+              const resolvedPaidAmount = remoteOrder.paidAmount !== undefined
+                ? remoteOrder.paidAmount
+                : (localOrder.paidAmount !== undefined ? localOrder.paidAmount : 0);
+
+              const resolvedRemaining = remoteOrder.remainingAmount !== undefined
+                ? remoteOrder.remainingAmount
+                : (
+                    localOrder.remainingAmount !== undefined
+                      ? localOrder.remainingAmount
+                      : Math.max(0, resolvedTotal - resolvedPaidAmount)
+                  );
+
+              const resolvedPaymentStatus: Order['paymentStatus'] =
+                remoteOrder.paymentStatus !== undefined
+                  ? ((resolvedRemaining <= 0.05 && resolvedTotal > 0 && resolvedPaidAmount > 0)
+                      ? 'Paid'
+                      : (remoteOrder.paymentStatus as Order['paymentStatus']))
+                  : (localOrder.paymentStatus || 'Pending');
+
+              return {
+                ...remoteOrder,
+                sessionId: remoteOrder.sessionId || localOrder.sessionId,
+                round: remoteOrder.round || localOrder.round || 1,
+                isAddon: remoteOrder.isAddon !== undefined ? remoteOrder.isAddon : localOrder.isAddon,
+                total: resolvedTotal,
+                status: useLocalStatus ? localOrder.status : remoteOrder.status,
+                paymentStatus: resolvedPaymentStatus,
+                paidAmount: resolvedPaidAmount,
+                remainingAmount: resolvedRemaining,
+                paymentHistory: (remoteOrder.paymentHistory && remoteOrder.paymentHistory.length > 0) ? remoteOrder.paymentHistory : (localOrder.paymentHistory || remoteOrder.paymentHistory)
+              };
+            });
+
+            // Retain any pending local order not yet retrieved from remote
+            const remoteIds = new Set(reconciled.map(r => r.id));
+            const localOnly = currentLocal.filter(l => !remoteIds.has(l.id));
+            const finalOrders = [...reconciled, ...localOnly];
+
+            saveStoredOrders(finalOrders, restaurantId);
+            return { orders: finalOrders, source: 'supabase' as const };
+          } else if (restaurantId === DEFAULT_RESTAURANT_ID) {
+            // Table exists but is empty for default restaurant -> seed initial historical orders to Supabase
+            const seeded = INITIAL_HISTORICAL_ORDERS.map(o => ({ ...o, restaurant_id: DEFAULT_RESTAURANT_ID }));
+            saveStoredOrders(seeded, DEFAULT_RESTAURANT_ID);
+            const rowsToInsert = seeded.map(o => mapOrderToSupabasePayload(o));
+            Promise.resolve(supabase.from('royal_orders').insert(rowsToInsert)).catch(() => {});
+            return { orders: seeded, source: 'supabase' as const };
+          }
+
+          return { orders: getStoredOrders(restaurantId), source: 'local' as const };
+        },
+        fallback: async () => {
+          return { orders: getStoredOrders(restaurantId), source: 'local' as const };
         }
-      }
+      });
     } catch (e: any) {
       console.warn('Failed to fetch orders from Supabase:', e);
     }
@@ -2703,8 +3000,9 @@ export async function saveOrder(order: Order, restaurantId?: string): Promise<Or
   setCustomerActiveOrderId(finalOrder.id);
 
   safeDispatchEvent(new CustomEvent('rbh_new_order', { detail: finalOrder }));
-  if (ordersBroadcastChannel) {
-    ordersBroadcastChannel.postMessage({ type: 'NEW_ORDER', order: finalOrder, restaurantId: currentRid });
+  const newOrderCh = getOrdersBroadcastChannel(currentRid);
+  if (newOrderCh) {
+    newOrderCh.postMessage({ type: 'NEW_ORDER', order: finalOrder, restaurantId: currentRid });
   }
 
   return finalOrder;
@@ -2745,8 +3043,9 @@ export async function updateOrderStatus(orderId: string, status: Order['status']
   // Dispatch events AFTER Supabase is updated so that listener refetches see the newest data
   safeDispatchEvent(new CustomEvent('rbh_order_status_updated', { detail: { orderId, status, restaurantId } }));
   
-  if (ordersBroadcastChannel) {
-    ordersBroadcastChannel.postMessage({ type: 'STATUS_UPDATED', orderId, status, restaurantId });
+  const statusCh = getOrdersBroadcastChannel(restaurantId);
+  if (statusCh) {
+    statusCh.postMessage({ type: 'STATUS_UPDATED', orderId, status, restaurantId });
   }
 }
 
@@ -2933,8 +3232,10 @@ function initGlobalRealtimeIfNeeded() {
   window.addEventListener('rbh_customer_order_changed', handleLocalEvent);
   window.addEventListener('storage', handleStorageEvent);
 
-  if (ordersBroadcastChannel) {
-    ordersBroadcastChannel.addEventListener('message', handleBroadcastMessage);
+  const currentRid = getCurrentRestaurantId();
+  const ordersBc = getOrdersBroadcastChannel(currentRid);
+  if (ordersBc) {
+    ordersBc.addEventListener('message', handleBroadcastMessage);
   }
 
   // Subscribe to Supabase realtime table & broadcast channels with unique channel
@@ -2984,7 +3285,19 @@ function initGlobalRealtimeIfNeeded() {
             safeDispatchEvent(new CustomEvent('rbh_feedback_updated', { detail: payload.payload }));
           }
         })
-        .subscribe();
+        .subscribe((status: string) => {
+          if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+            jarvis.recordIncident({
+              module: 'REALTIME',
+              operation: 'supabase_realtime_subscribe',
+              severity: 'MEDIUM',
+              level: 1,
+              error: new Error(`Supabase realtime channel status: ${status}`),
+              restaurantId: currentRid,
+              metadata: { status, channel: channelName }
+            });
+          }
+        });
     } catch (err) {
       console.warn('Supabase realtime subscription notice:', err);
     }
@@ -3265,6 +3578,7 @@ export interface RecordPaymentParams {
   recordedBy?: string;
   notes?: string;
   idempotencyKey?: string;
+  restaurantId?: string;
 }
 
 export async function recordDiningSessionPayment(params: RecordPaymentParams): Promise<{
@@ -3275,8 +3589,9 @@ export async function recordDiningSessionPayment(params: RecordPaymentParams): P
   remainingAmount: number;
   newPayments: PaymentRecord[];
 }> {
-  const currentOrders = getStoredOrders();
-  const allPayments = getStoredPayments();
+  const currentRestaurantId = (params.restaurantId || getCurrentRestaurantId() || DEFAULT_RESTAURANT_ID).trim().toLowerCase();
+  const currentOrders = getStoredOrders(currentRestaurantId);
+  const allPayments = getStoredPayments(currentRestaurantId);
   const nowIso = new Date().toISOString();
 
   let targetSessionId = params.sessionId;
@@ -3373,8 +3688,6 @@ export async function recordDiningSessionPayment(params: RecordPaymentParams): P
   const newTotalPaid = Math.min(grandTotal, Math.round((previouslyPaid + totalPaidNow) * 100) / 100);
   const newRemaining = Math.max(0, Math.round((grandTotal - newTotalPaid) * 100) / 100);
   const isFullyPaid = newRemaining <= 0.05;
-
-  const currentRestaurantId = currentOrders[0]?.restaurant_id || getCurrentRestaurantId();
 
   // Generate deterministic/idempotent PaymentRecords (exactly ONE per non-zero split)
   const cleanSessionToken = (targetSessionId || matchingOrders[0]?.id || targetTableNumber || 'TBL')
@@ -3599,15 +3912,18 @@ export async function recordDiningSessionPayment(params: RecordPaymentParams): P
   safeDispatchEvent(new Event('rbh_order_updated'));
   safeDispatchEvent(new Event('rbh_orders_changed'));
 
-  if (ordersBroadcastChannel) {
-    ordersBroadcastChannel.postMessage({
-      type: 'STATUS_UPDATED',
-      sessionId: targetSessionId,
-      tableNumber: targetTableNumber,
-      orderIds: affectedOrderIds,
-      status: isFullyPaid ? 'Completed' : 'Updated',
-      paymentStatus: isFullyPaid ? 'Paid' : 'Partially Paid'
-    });
+  const targetBc = getOrdersBroadcastChannel(currentRestaurantId);
+  if (targetBc) {
+    try {
+      targetBc.postMessage({
+        type: 'STATUS_UPDATED',
+        sessionId: targetSessionId,
+        tableNumber: targetTableNumber,
+        orderIds: affectedOrderIds,
+        status: isFullyPaid ? 'Completed' : 'Updated',
+        paymentStatus: isFullyPaid ? 'Paid' : 'Partially Paid'
+      });
+    } catch (e) {}
   }
 
   return {
@@ -4000,8 +4316,11 @@ export function saveCustomerFeedback(
   }
   safeDispatchEvent(new CustomEvent('rbh_feedback_updated', { detail: feedback }));
 
-  if (ordersBroadcastChannel) {
-    ordersBroadcastChannel.postMessage({ type: 'FEEDBACK_UPDATED', feedback });
+  const targetFeedbackBc = getOrdersBroadcastChannel(targetRestId);
+  if (targetFeedbackBc) {
+    try {
+      targetFeedbackBc.postMessage({ type: 'FEEDBACK_UPDATED', feedback });
+    } catch (e) {}
   }
 
   // Also push to Supabase if feedback table exists
@@ -4179,7 +4498,8 @@ export function saveRawMaterial(
 ): RawMaterial {
   const current = getStoredRawMaterials(restaurantId);
   const isExisting = Boolean(material.id && current.some(m => m.id === material.id));
-  const id = material.id || `raw-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`;
+  const cleanRid = (restaurantId || DEFAULT_RESTAURANT_ID).replace(/[^a-z0-9_-]/gi, '');
+  const id = material.id || `mat_${cleanRid}_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
   const qty = Math.max(0, Math.round(Number(material.quantity || 0) * 1000) / 1000);
   const min = Math.max(0.01, Math.round(Number(material.minimumThreshold || 5) * 100) / 100);
   const status: RawMaterialStockStatus = qty <= 0 ? 'OUT OF STOCK' : (qty <= min ? 'LOW STOCK' : 'IN STOCK');
@@ -4218,7 +4538,7 @@ export function saveRawMaterial(
   // If new item, log opening stock movement
   if (!isExisting && qty > 0) {
     const openingMovement: StockMovement = {
-      id: `sm-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      id: `sm_${cleanRid}_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`,
       restaurant_id: restaurantId,
       rawMaterialId: savedItem.id,
       rawMaterialName: savedItem.name,
@@ -4240,9 +4560,10 @@ export function saveRawMaterial(
   }
 
   safeDispatchEvent(new CustomEvent('rbh_raw_materials_updated', { detail: { rawMaterial: savedItem, restaurantId } }));
-  if (ordersBroadcastChannel) {
+  const broadcastCh = getOrdersBroadcastChannel(restaurantId);
+  if (broadcastCh) {
     try {
-      ordersBroadcastChannel.postMessage({ type: 'RAW_MATERIALS_UPDATED', rawMaterial: savedItem, restaurantId });
+      broadcastCh.postMessage({ type: 'RAW_MATERIALS_UPDATED', rawMaterial: savedItem, restaurantId });
     } catch (e) {}
   }
 
@@ -4285,9 +4606,10 @@ export function deleteRawMaterial(id: string, restaurantId: string = getCurrentR
   saveStoredRawMaterials(updated, restaurantId);
 
   safeDispatchEvent(new CustomEvent('rbh_raw_materials_updated', { detail: { deletedId: id, restaurantId } }));
-  if (ordersBroadcastChannel) {
+  const delBroadcastCh = getOrdersBroadcastChannel(restaurantId);
+  if (delBroadcastCh) {
     try {
-      ordersBroadcastChannel.postMessage({ type: 'RAW_MATERIALS_UPDATED', deletedId: id, restaurantId });
+      delBroadcastCh.postMessage({ type: 'RAW_MATERIALS_UPDATED', deletedId: id, restaurantId });
     } catch (e) {}
   }
 
@@ -4493,9 +4815,10 @@ export async function updateRawMaterialStock(params: {
   safeDispatchEvent(new CustomEvent('rbh_raw_materials_updated', { detail: { rawMaterial: updatedItem, movement: newMovement, restaurantId } }));
 
   // Broadcast across tabs
-  if (ordersBroadcastChannel) {
+  const rmBc = getOrdersBroadcastChannel(restaurantId);
+  if (rmBc) {
     try {
-      ordersBroadcastChannel.postMessage({
+      rmBc.postMessage({
         type: 'RAW_MATERIALS_UPDATED',
         rawMaterial: updatedItem,
         movement: newMovement,
@@ -4807,9 +5130,10 @@ export function saveMenuItemRecipe(
   saveStoredRecipes(updatedList, restaurantId);
 
   safeDispatchEvent(new CustomEvent('rbh_recipes_updated', { detail: { recipe: savedRecipe, restaurantId } }));
-  if (ordersBroadcastChannel) {
+  const recipeBc = getOrdersBroadcastChannel(restaurantId);
+  if (recipeBc) {
     try {
-      ordersBroadcastChannel.postMessage({ type: 'RECIPES_UPDATED', recipe: savedRecipe, restaurantId });
+      recipeBc.postMessage({ type: 'RECIPES_UPDATED', recipe: savedRecipe, restaurantId });
     } catch (e) {}
   }
 
@@ -4864,9 +5188,10 @@ export function deleteMenuItemRecipe(recipeId: string, restaurantId: string = ge
   saveStoredRecipes(updated, restaurantId);
 
   safeDispatchEvent(new CustomEvent('rbh_recipes_updated', { detail: { deletedId: recipeId, restaurantId } }));
-  if (ordersBroadcastChannel) {
+  const delRecipeBc = getOrdersBroadcastChannel(restaurantId);
+  if (delRecipeBc) {
     try {
-      ordersBroadcastChannel.postMessage({ type: 'RECIPES_UPDATED', deletedId: recipeId, restaurantId });
+      delRecipeBc.postMessage({ type: 'RECIPES_UPDATED', deletedId: recipeId, restaurantId });
     } catch (e) {}
   }
 
@@ -5012,9 +5337,10 @@ export async function recordInventoryPurchase(
   saveStoredPurchases(updatedPurchases, restaurantId);
 
   safeDispatchEvent(new CustomEvent('rbh_purchases_updated', { detail: { purchase: savedRecord, restaurantId } }));
-  if (ordersBroadcastChannel) {
+  const purchaseBc = getOrdersBroadcastChannel(restaurantId);
+  if (purchaseBc) {
     try {
-      ordersBroadcastChannel.postMessage({ type: 'PURCHASES_UPDATED', purchase: savedRecord, restaurantId });
+      purchaseBc.postMessage({ type: 'PURCHASES_UPDATED', purchase: savedRecord, restaurantId });
     } catch (e) {}
   }
 
@@ -5181,9 +5507,10 @@ export async function recordInventoryWastage(
   saveStoredWastage(updatedWastage, restaurantId);
 
   safeDispatchEvent(new CustomEvent('rbh_wastage_updated', { detail: { wastage: savedRecord, restaurantId } }));
-  if (ordersBroadcastChannel) {
+  const wastageBc = getOrdersBroadcastChannel(restaurantId);
+  if (wastageBc) {
     try {
-      ordersBroadcastChannel.postMessage({ type: 'WASTAGE_UPDATED', wastage: savedRecord, restaurantId });
+      wastageBc.postMessage({ type: 'WASTAGE_UPDATED', wastage: savedRecord, restaurantId });
     } catch (e) {}
   }
 
@@ -5360,7 +5687,8 @@ export async function consumeInventoryForOrders(
   };
 }
 
-export function subscribeToRawMaterialsRealtime(onRawMaterialsChange: () => void): () => void {
+export function subscribeToRawMaterialsRealtime(onRawMaterialsChange: () => void, restaurantId: string = getCurrentRestaurantId()): () => void {
+  const cleanRid = (restaurantId || getCurrentRestaurantId() || DEFAULT_RESTAURANT_ID).trim().toLowerCase();
   const handleLocal = () => onRawMaterialsChange();
   const handleBroadcast = (event: MessageEvent) => {
     if (event.data && (
@@ -5369,16 +5697,25 @@ export function subscribeToRawMaterialsRealtime(onRawMaterialsChange: () => void
       event.data.type === 'PURCHASES_UPDATED' || 
       event.data.type === 'WASTAGE_UPDATED'
     )) {
-      onRawMaterialsChange();
+      if (!event.data.restaurantId || event.data.restaurantId === cleanRid) {
+        onRawMaterialsChange();
+      }
     }
   };
   const handleStorage = (event: StorageEvent) => {
     if (
-      event.key === RAW_MATERIALS_STORAGE_KEY || 
-      event.key === STOCK_MOVEMENTS_STORAGE_KEY ||
-      event.key === MENU_RECIPES_STORAGE_KEY ||
-      event.key === INVENTORY_PURCHASES_STORAGE_KEY ||
-      event.key === INVENTORY_WASTAGE_STORAGE_KEY
+      event.key === getTenantStorageKey(RAW_MATERIALS_STORAGE_KEY, cleanRid) || 
+      event.key === getTenantStorageKey(STOCK_MOVEMENTS_STORAGE_KEY, cleanRid) ||
+      event.key === getTenantStorageKey(MENU_RECIPES_STORAGE_KEY, cleanRid) ||
+      event.key === getTenantStorageKey(INVENTORY_PURCHASES_STORAGE_KEY, cleanRid) ||
+      event.key === getTenantStorageKey(INVENTORY_WASTAGE_STORAGE_KEY, cleanRid) ||
+      (cleanRid === DEFAULT_RESTAURANT_ID && (
+        event.key === RAW_MATERIALS_STORAGE_KEY || 
+        event.key === STOCK_MOVEMENTS_STORAGE_KEY ||
+        event.key === MENU_RECIPES_STORAGE_KEY ||
+        event.key === INVENTORY_PURCHASES_STORAGE_KEY ||
+        event.key === INVENTORY_WASTAGE_STORAGE_KEY
+      ))
     ) {
       onRawMaterialsChange();
     }
@@ -5389,8 +5726,9 @@ export function subscribeToRawMaterialsRealtime(onRawMaterialsChange: () => void
   window.addEventListener('rbh_purchases_updated', handleLocal);
   window.addEventListener('rbh_wastage_updated', handleLocal);
   window.addEventListener('storage', handleStorage);
-  if (ordersBroadcastChannel) {
-    ordersBroadcastChannel.addEventListener('message', handleBroadcast);
+  const broadcastCh = getOrdersBroadcastChannel(cleanRid);
+  if (broadcastCh) {
+    broadcastCh.addEventListener('message', handleBroadcast);
   }
 
   let supabaseChannel: any = null;
@@ -5398,8 +5736,13 @@ export function subscribeToRawMaterialsRealtime(onRawMaterialsChange: () => void
   if (supabase) {
     try {
       supabaseChannel = supabase
-        .channel('royal_raw_materials_realtime')
-        .on('postgres_changes', { event: '*', schema: 'public', table: 'raw_materials' }, () => {
+        .channel(`royal_raw_materials_realtime_${cleanRid}`)
+        .on('postgres_changes', { 
+          event: '*', 
+          schema: 'public', 
+          table: 'raw_materials',
+          filter: `restaurant_id=eq.${cleanRid}`
+        }, () => {
           onRawMaterialsChange();
         })
         .on('broadcast', { event: 'raw_materials_updated' }, () => {
@@ -5415,8 +5758,8 @@ export function subscribeToRawMaterialsRealtime(onRawMaterialsChange: () => void
     window.removeEventListener('rbh_purchases_updated', handleLocal);
     window.removeEventListener('rbh_wastage_updated', handleLocal);
     window.removeEventListener('storage', handleStorage);
-    if (ordersBroadcastChannel) {
-      ordersBroadcastChannel.removeEventListener('message', handleBroadcast);
+    if (broadcastCh) {
+      broadcastCh.removeEventListener('message', handleBroadcast);
     }
     if (supabase && supabaseChannel) {
       supabase.removeChannel(supabaseChannel);
@@ -6326,6 +6669,15 @@ export async function createOrderSecure(
       });
 
       if (error) {
+        jarvis.recordIncident({
+          module: 'ORDER',
+          operation: 'create_order_secure',
+          severity: 'HIGH',
+          level: 2,
+          error,
+          restaurantId: params.restaurantId,
+          metadata: { tableNumber: params.tableNumber, sessionId: params.sessionId }
+        });
         return {
           success: false,
           error: error.message || 'Error executing create_order_secure RPC'
@@ -6355,6 +6707,15 @@ export async function createOrderSecure(
         order: mappedOrder
       };
     } catch (err: any) {
+      jarvis.recordIncident({
+        module: 'ORDER',
+        operation: 'create_order_secure',
+        severity: 'HIGH',
+        level: 2,
+        error: err,
+        restaurantId: params.restaurantId,
+        metadata: { tableNumber: params.tableNumber, sessionId: params.sessionId }
+      });
       return {
         success: false,
         error: err?.message || 'Unexpected error in createOrderSecure'
@@ -6370,13 +6731,16 @@ export async function createOrderSecure(
     };
   }
 
-  const localRes = getLocalMenuItems();
-  const localItems = localRes.items && localRes.items.length > 0 ? localRes.items : DEFAULT_MENU_ITEMS;
+  const localRes = getLocalMenuItems(undefined, params.restaurantId);
+  const localItems = localRes.items && localRes.items.length > 0 
+    ? localRes.items 
+    : (params.restaurantId === DEFAULT_RESTAURANT_ID ? DEFAULT_MENU_ITEMS : []);
   let subtotal = 0;
   const verifiedOrderItems: any[] = [];
 
   for (const item of sanitizedItems) {
-    const found = localItems.find(mi => String(mi.id) === String(item.id)) || DEFAULT_MENU_ITEMS.find(mi => String(mi.id) === String(item.id));
+    const found = localItems.find(mi => String(mi.id) === String(item.id)) 
+      || (params.restaurantId === DEFAULT_RESTAURANT_ID ? DEFAULT_MENU_ITEMS.find(mi => String(mi.id) === String(item.id)) : null);
     if (!found) {
       return { success: false, error: `Menu item "${item.id}" does not exist` };
     }
@@ -6394,7 +6758,9 @@ export async function createOrderSecure(
     });
   }
 
-  const tax = Math.round(subtotal * 0.05 * 10) / 10;
+  const settings = getStoredRestaurantSettings(params.restaurantId);
+  const effectiveGstRate = (settings.gstEnabled !== false ? (typeof settings.gstRate === 'number' ? settings.gstRate : 5.0) : 0) / 100;
+  const tax = Math.round(subtotal * effectiveGstRate * 10) / 10;
   const total = subtotal + tax;
   const orderId = generateOrderId();
   const sessionId = params.sessionId || `SESS-${params.tableNumber.replace(/\s+/g, '')}-${Date.now()}`;
@@ -6571,6 +6937,20 @@ export async function settleDiningSessionAtomic(
       });
 
       if (error) {
+        jarvis.recordIncident({
+          module: 'BILLING',
+          operation: 'settle_dining_session_atomic',
+          severity: 'CRITICAL',
+          level: 3,
+          error,
+          restaurantId: params.restaurantId,
+          metadata: {
+            tableNumber: params.tableNumber,
+            sessionId: params.sessionId,
+            idempotencyKey,
+            totalOffered
+          }
+        });
         return {
           success: false,
           isFullyPaid: false,
@@ -6651,7 +7031,8 @@ export async function settleDiningSessionAtomic(
       splitPayments: formattedSplits,
       recordedBy: params.recordedBy || 'Counter Cashier',
       notes: params.notes,
-      idempotencyKey
+      idempotencyKey,
+      restaurantId: params.restaurantId
     });
 
     const grandTotal = Math.round(((rec.paidAmountTotal || 0) + (rec.remainingAmount || 0)) * 100) / 100;
