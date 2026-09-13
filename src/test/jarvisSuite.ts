@@ -15,6 +15,7 @@
  * Test J: Secrets/tokens are redacted from incidents (Zero secret exposure)
  * Test K: Existing RMS order flow remains unchanged
  * Test L: Existing settlement flow remains unchanged
+ * Test M: JARVIS staff indicator 4-state lifecycle (Healthy -> Auto-Recovered -> Degraded -> Critical)
  */
 
 // Setup browser globals for Node.js test runner if running outside a browser
@@ -599,17 +600,86 @@ async function runJarvisSuite() {
   }
 
   // =========================================================================
+  // TEST M: JARVIS Staff Indicator UI 4-State Lifecycle
+  // =========================================================================
+  try {
+    const testRid = 'test-indicator-lifecycle-branch';
+    jarvis.clearAllIncidents(testRid);
+
+    // State 1: Healthy (JARVIS ● Healthy)
+    const h1 = jarvis.getHealth(testRid);
+    if (h1.status !== 'HEALTHY') {
+      throw new Error(`Expected State 1 HEALTHY, got ${h1.status}`);
+    }
+
+    // State 2: Recoverable transient failure (auto-recovers back to Healthy)
+    let callCount = 0;
+    await jarvis.executeSafe({
+      restaurantId: testRid,
+      operation: 'fetch_mock_menu',
+      module: 'MENU',
+      initialBackoffMs: 10,
+      action: async () => {
+        callCount++;
+        if (callCount < 2) throw new Error('Transient network timeout');
+        return 'ok';
+      }
+    });
+    const h2 = jarvis.getHealth(testRid);
+    if (h2.status !== 'HEALTHY' || h2.activeIncidentsCount !== 0) {
+      throw new Error(`Expected State 2 HEALTHY with 0 active incidents, got ${h2.status}, active: ${h2.activeIncidentsCount}`);
+    }
+
+    // State 3: Unresolved non-critical incident (JARVIS ● 1 issue)
+    jarvis.recordIncident({
+      restaurantId: testRid,
+      module: 'KDS',
+      operation: 'kds_sync',
+      error: new Error('WebSocket connection interrupted'),
+      level: 2,
+      severity: 'HIGH',
+      recoveryResult: 'manual_required'
+    });
+    const h3 = jarvis.getHealth(testRid);
+    if (h3.status !== 'DEGRADED' || h3.activeIncidentsCount !== 1) {
+      throw new Error(`Expected State 3 DEGRADED with 1 issue, got ${h3.status}, active: ${h3.activeIncidentsCount}`);
+    }
+
+    // State 4: Critical incident (JARVIS ● Critical incident)
+    jarvis.recordIncident({
+      restaurantId: testRid,
+      module: 'POS',
+      operation: 'counter_sync',
+      error: new Error('Critical terminal disconnect'),
+      level: 3,
+      severity: 'CRITICAL',
+      recoveryResult: 'manual_required'
+    });
+    const h4 = jarvis.getHealth(testRid);
+    if (h4.status !== 'CRITICAL' || h4.criticalIncidentsCount < 1) {
+      throw new Error(`Expected State 4 CRITICAL, got ${h4.status}`);
+    }
+
+    jarvis.clearAllIncidents(testRid);
+    pass('TEST_M', 'JARVIS Staff Indicator 4-State Cycle confirmed (Healthy -> Auto-Recovered -> Degraded -> Critical)');
+    passed++;
+  } catch (err) {
+    fail('TEST_M', 'Indicator UI states test failed', err);
+    failed++;
+  }
+
+  // =========================================================================
   // FINAL SCORECARD
   // =========================================================================
   console.log(`\n${colors.cyan}${colors.bold}================================================================${colors.reset}`);
   console.log(`${colors.bold}                    FINAL SCORECARD                            ${colors.reset}`);
   console.log(`${colors.cyan}${colors.bold}================================================================${colors.reset}`);
-  console.log(`  Total Tests Run: 12`);
+  console.log(`  Total Tests Run: ${passed + failed}`);
   console.log(`  ${colors.green}Tests Passed:   ${passed}${colors.reset}`);
   console.log(`  ${colors.red}Tests Failed:   ${failed}${colors.reset}`);
 
   if (failed === 0) {
-    console.log(`\n  ${colors.green}${colors.bold}>>> ALL 12 JARVIS OPERATIONAL CRITERIA CONFIRMED (12/12 PASS) <<<${colors.reset}\n`);
+    console.log(`\n  ${colors.green}${colors.bold}>>> ALL ${passed} JARVIS OPERATIONAL CRITERIA CONFIRMED (${passed}/${passed} PASS) <<<${colors.reset}\n`);
     process.exit(0);
   } else {
     console.error(`\n  ${colors.red}${colors.bold}>>> CRITICAL FAILURE: ${failed} TEST(S) FAILED <<<${colors.reset}\n`);

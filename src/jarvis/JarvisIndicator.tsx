@@ -65,44 +65,53 @@ export const JarvisIndicator: React.FC<JarvisIndicatorProps> = ({ restaurantId }
     }
   };
 
-  // Visual status pill configurations
+  // Visual status pill configurations styled to harmoniously complement the Royal Biryani House header
   const statusConfig = {
     HEALTHY: {
-      badgeBg: 'bg-emerald-950/40 text-emerald-300 border-emerald-800/50 hover:bg-emerald-950/60',
-      dotColor: 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.6)]',
+      badgeBg: 'bg-emerald-50 text-emerald-900 border-emerald-300 hover:bg-emerald-100/90 shadow-2xs',
+      dotColor: 'bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.6)]',
       label: 'Healthy',
       icon: ShieldCheck
     },
     DEGRADED: {
-      badgeBg: 'bg-amber-950/40 text-amber-300 border-amber-800/50 hover:bg-amber-950/60',
-      dotColor: 'bg-amber-400 animate-pulse shadow-[0_0_8px_rgba(251,191,36,0.6)]',
+      badgeBg: 'bg-amber-50 text-amber-900 border-amber-300 hover:bg-amber-100/90 shadow-2xs',
+      dotColor: 'bg-amber-500 animate-pulse shadow-[0_0_6px_rgba(245,158,11,0.6)]',
       label: `${health.activeIncidentsCount} issue${health.activeIncidentsCount > 1 ? 's' : ''}`,
       icon: AlertTriangle
     },
     CRITICAL: {
-      badgeBg: 'bg-rose-950/50 text-rose-300 border-rose-800/60 hover:bg-rose-950/70',
-      dotColor: 'bg-rose-500 animate-ping shadow-[0_0_10px_rgba(244,63,94,0.8)]',
+      badgeBg: 'bg-rose-50 text-rose-900 border-rose-300 hover:bg-rose-100/90 shadow-2xs',
+      dotColor: 'bg-rose-600 animate-ping shadow-[0_0_8px_rgba(225,29,72,0.7)]',
       label: 'Critical incident',
       icon: AlertCircle
     }
-  }[health.status];
+  }[health?.status || 'HEALTHY'] || {
+    badgeBg: 'bg-emerald-50 text-emerald-900 border-emerald-300 hover:bg-emerald-100/90 shadow-2xs',
+    dotColor: 'bg-emerald-500 shadow-[0_0_6px_rgba(16,185,129,0.6)]',
+    label: 'Healthy',
+    icon: ShieldCheck
+  };
 
   return (
     <>
       {/* Unobtrusive Header Badge for Staff */}
       <button
+        id="jarvis-status-btn"
         onClick={handleOpenModal}
-        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border transition duration-150 backdrop-blur-sm ${statusConfig.badgeBg}`}
-        title={`JARVIS Incident & Reliability Monitor (${health.status})`}
+        className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full font-medium transition-all text-[11px] border cursor-pointer shrink-0 ${statusConfig.badgeBg}`}
+        title={`JARVIS Incident & Reliability Monitor (${health?.status || 'HEALTHY'}) — Click to view diagnostic log`}
       >
-        <span className="font-bold tracking-wider text-[10px] opacity-75">JARVIS</span>
+        <span className="font-bold tracking-wider text-[10px] opacity-80 uppercase">JARVIS</span>
         <span className={`w-2 h-2 rounded-full ${statusConfig.dotColor}`} />
-        <span className="text-[11px] font-semibold">{statusConfig.label}</span>
+        <span className="font-semibold">{statusConfig.label}</span>
       </button>
 
       {/* Slide-over / Modal Diagnostic Drawer */}
       {isOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-950/75 backdrop-blur-sm animate-in fade-in duration-150">
+        <div 
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-stone-950/75 backdrop-blur-sm animate-in fade-in duration-150"
+          onClick={() => setIsOpen(false)}
+        >
           <div 
             className="w-full max-w-2xl bg-[#1c1917] text-stone-100 border border-stone-800 rounded-2xl shadow-2xl overflow-hidden flex flex-col max-h-[85vh] animate-in zoom-in-95 duration-150"
             onClick={e => e.stopPropagation()}

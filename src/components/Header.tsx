@@ -42,14 +42,14 @@ export const Header: React.FC<HeaderProps> = ({
     <header className="sticky top-0 z-40 bg-[#fdfbf7]/95 backdrop-blur-md border-b border-[#e5e1da] shadow-sm">
       {/* Top micro bar for Demo & Staff switch */}
       <div className="bg-[#f7f3ed] border-b border-[#e5e1da] px-3 py-1.5 text-xs text-[#1a1a1a]">
-        <div className="max-w-7xl mx-auto flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
+        <div className="max-w-7xl mx-auto flex flex-wrap sm:flex-nowrap items-center justify-between gap-y-1.5 gap-x-2">
+          <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap shrink-0">
             {isStaffAuthenticated && currentView !== 'customer' && (
               <>
                 <button
                   id="supabase-status-btn"
                   onClick={onOpenSupabaseSettings}
-                  className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full font-medium transition-all text-[11px] ${
+                  className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full font-medium transition-all text-[11px] shrink-0 ${
                     supabaseConnected
                       ? 'bg-emerald-50 text-emerald-800 border border-emerald-300 hover:bg-emerald-100'
                       : 'bg-amber-50 text-[#5c1b1b] border border-[#d4af37]/40 hover:bg-amber-100'
@@ -69,18 +69,18 @@ export const Header: React.FC<HeaderProps> = ({
               id="refresh-menu-btn"
               onClick={onRefreshMenu}
               disabled={isRefreshing}
-              className="text-stone-500 hover:text-[#5c1b1b] transition-colors p-1 rounded hover:bg-[#e5e1da]/50"
+              className="text-stone-500 hover:text-[#5c1b1b] transition-colors p-1 rounded hover:bg-[#e5e1da]/50 shrink-0"
               title="Sync menu from Supabase"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-[#d4af37]' : ''}`} />
             </button>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap sm:flex-nowrap">
             <button
               id="qr-preview-btn"
               onClick={onOpenQrModal}
-              className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-white hover:bg-[#f0ede8] text-[#1a1a1a] text-xs border border-[#e5e1da] transition font-medium shadow-xs"
+              className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-white hover:bg-[#f0ede8] text-[#1a1a1a] text-xs border border-[#e5e1da] transition font-medium shadow-xs shrink-0"
               title="Show QR Code for table"
             >
               <QrCode className="w-3 h-3 text-[#5c1b1b]" />
@@ -142,7 +142,7 @@ export const Header: React.FC<HeaderProps> = ({
                 <button
                   id="exit-staff-mode-btn"
                   onClick={() => onExitStaffMode ? onExitStaffMode() : onViewChange('customer')}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#5c1b1b]/10 hover:bg-[#5c1b1b]/20 text-[#5c1b1b] text-xs font-bold transition cursor-pointer"
+                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-[#5c1b1b]/10 hover:bg-[#5c1b1b]/20 text-[#5c1b1b] text-xs font-bold transition cursor-pointer shrink-0"
                   title="Lock and return to customer dining view"
                 >
                   <LogOut className="w-3 h-3" />
